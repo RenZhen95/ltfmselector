@@ -2,7 +2,7 @@ import random
 import numpy as np
 import pandas as pd
 
-from utils import balance_classDistribution_patient
+from .utils import balance_classDistribution_patient
 
 ### Special-tailored implementation ###
 # Function to get patient's ID given a stride pair ID

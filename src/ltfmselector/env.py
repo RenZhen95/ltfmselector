@@ -269,11 +269,11 @@ class Environment:
                 X_test = X_test.values
 
             if sample_weight is None:
+                selected_predModel.fit(X_train, y_train)
+            else:
                 selected_predModel.fit(
                     X_train, y_train, sample_weight=sample_weight
                 )
-            else:
-                selected_predModel.fit(X_train, y_train)
                 
             self.y_pred = selected_predModel.predict(X_test)[0]
 

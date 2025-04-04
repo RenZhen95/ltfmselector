@@ -1,6 +1,6 @@
 ﻿<h1>
   <picture>
-    <img alt="LTFMSelectorLogo" src="icons/icon.png">
+    <img alt="LTFMSelectorLogo" src="icons/icon.png" width="600px">
   </picture>
 </h1>
 

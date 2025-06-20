@@ -17,7 +17,7 @@ dependencies = [
 license = {file = "LICENSE"}
 
 [project.urls]
-homepage = "https://github.com/RenZhen95/ltfmselector/"
+GitHub = "https://github.com/RenZhen95/ltfmselector/"
 
 [build-system]
 requires = ["hatchling"]

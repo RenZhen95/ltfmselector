@@ -2,7 +2,7 @@ import random
 import numpy as np
 import pandas as pd
 
-from .utils import balance_classDistribution_patient
+from utils import balance_classDistribution_patient
 
 ### Special-tailored implementation ###
 # Function to get patient's ID given a stride pair ID
@@ -25,52 +25,52 @@ class Environment:
         Paramters
         ---------
         X : pd.DataFrame
-         - Training dataset, pandas dataframe with the shape:
-           (n_samples, n_features)
+            Training dataset, pandas dataframe with the shape:
+            (n_samples, n_features)
 
         y : pd.Series
-         - Class/Target vector
+            Class/Target vector
 
         X_bg : pd.DataFrame
-         - Background dataaset, pandas dataframe with the shape:
-           (n_samples+1, n_features)
-
-           An extra row for 'Total', average feature values for all training
-           samples
+            Background dataaset, pandas dataframe with the shape:
+            (n_samples+1, n_features)
+            
+            An extra row for 'Total', average feature values for all training
+            samples
 
         fQueryCost : float
-         - Cost of querying a feature
+            Cost of querying a feature
 
         mQueryCost : float
-         - Cost of querying a prediction model
+            Cost of querying a prediction model
 
         fRepeatQueryCost : float
-         - Cost of querying a feature already previously selected
+            Cost of querying a feature already previously selected
 
         p_wNoFCost : float
-         - Cost of switching selected prediction model
+            Cost of switching selected prediction model
 
         errorCost : float
-         - Cost of making a wrong prediction
+            Cost of making a wrong prediction
 
-           If pType == 'regression', then
-           Agent is punished -errorCost*abs(``prediction`` - ``target``)
+            If pType == 'regression', then
+            Agent is punished -errorCost*abs(``prediction`` - ``target``)
 
-           If pType == 'classification', then
-           Agent is punished -errorCost
+            If pType == 'classification', then
+            Agent is punished -errorCost
 
         pType : {'regression' or 'classification'}
-         - Type of prediction to make
+            Type of prediction to make
 
         regression_tol : float
-         - Only applicable for regression models, punish agent if prediction
-           error is bigger than regression_tol
+            Only applicable for regression models, punish agent if prediction
+            error is bigger than regression_tol
 
         pModels : None or ``list of prediction models``
-         - Options of prediction models that the agent can choose from.
+            Options of prediction models that the agent can choose from.
 
         device : ``CPU`` or ``GPU``
-         - Computation device
+            Computation device
         '''
         # Datasets
         self.X = X
@@ -169,12 +169,12 @@ class Environment:
         Parameters
         ----------
         action : int
-         = -1 (make a prediction with selected features and prediction model)
-         = int : [0, n_features] (query a feature)
-         = int : [n_features, n_features + n_model] (query a prediction model)
+            = -1 (make a prediction with selected features and prediction model)
+            = int : [0, n_features] (query a feature)
+            = int : [n_features, n_features + n_model] (query a prediction model)
 
         sample_weight : list or array or None
-         - Per-sample weights
+            Per-sample weights
         '''
         # === === === ===
         # Query a feature

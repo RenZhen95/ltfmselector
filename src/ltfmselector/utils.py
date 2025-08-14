@@ -87,16 +87,16 @@ def balance_classDistribution_patient(template_df, score):
     Parameters
     ----------
     template_df : pd.DataFrame
-     - DataFrame extracted to be used as a template, mainly for the sample indices and their
-       corresponding scores
+        DataFrame extracted to be used as a template, mainly for the sample indices and their
+        corresponding scores
 
     score : str
-     - Medical score to target
+        Medical score to target
 
     Returns
     -------
     df_sampleWeights : pd.DataFrame
-     - DataFrame mapping each sample to its corresponding weight
+        DataFrame mapping each sample to its corresponding weight
     '''
     # Pandas DataFrame of the weights of each sample
     df_sampleWeights = pd.DataFrame(index=template_df.index, columns=['Weight'])

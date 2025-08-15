@@ -23,7 +23,9 @@ class LTFMSelector:
             eps_start=0.9, eps_end=0.05, eps_decay=1000,
             fQueryCost=0.01, mQueryCost=0.01,
             fRepeatQueryCost=1.0, p_wNoFCost=5.0, errorCost=1.0,
-            pType="regression", regression_tol=0.5, pModels=None,
+            pType="regression", regression_tol=0.5,
+            regression_error_rounding=1,
+            pModels=None,
             gamma=0.99, max_timesteps=None,
             checkpoint_interval=None, device="cpu"
     ):
@@ -78,6 +80,10 @@ class LTFMSelector:
         regression_tol : float
             Only applicable for regression models, punish agent if prediction
             error is bigger than regression_tol
+
+        regression_error_rounding : int (default = 1)
+            Only applicable for regression models. The error between the 
+            prediction and true value is rounded to the input decimal place.
 
         pModels : None or ``list of prediction models``
             Options of prediction models that the agent can choose from
@@ -142,6 +148,7 @@ class LTFMSelector:
         self.p_wNoFCost = p_wNoFCost
         self.errorCost = errorCost
         self.regression_tol = regression_tol
+        self.regression_error_rounding = regression_error_rounding
 
         # Available option of prediction models the agent can select
         if (pModels is None) and (self.pType == "regression"):
@@ -240,6 +247,9 @@ class LTFMSelector:
             r_avr_list = []
             V_avr_list = []
 
+        # Enforce float32
+        X = X.astype(np.float32)
+
         # Compute background dataset if needed
         if background_dataset is None:
             # Computing background dataset (assuming numerical features)
@@ -259,7 +269,8 @@ class LTFMSelector:
             X, y, df_train_avg,
             self.fQueryCost, self.mQueryCost,
             self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
-            self.pType, self.regression_tol, self.pModels, self.device
+            self.pType, self.regression_tol, self.regression_error_rounding,
+            self.pModels, self.device
         )
         self.env.reset()
 
@@ -566,7 +577,7 @@ class LTFMSelector:
         #    with the policy network
         state_action_values = self.policy_net(state_batch).gather(
             1, action_batch+1
-        )
+        ).float()
         # action_batch+1 because the actions begin from [-1 0 1 2 ...],
         # where -1 indicates the action of making a prediction.
 
@@ -586,15 +597,17 @@ class LTFMSelector:
         # This is merged, per non_final_mask, such that we'll have either:
         #  1. r + GAMMA * max_(a) {Q(s', a)}
         #  2. 0 (cause that state was final for that episode)
-        next_state_values = torch.zeros(self.batch_size, device=self.device)
+        next_state_values = torch.zeros(
+            self.batch_size, device=self.device, dtype=torch.float32
+        )
         with torch.no_grad():
             next_state_values[non_final_mask] = self.target_net(
                 non_final_next_states
-            ).max(1)[0]
+            ).max(1)[0].float()
 
         expected_state_action_values = (
             reward_batch + (next_state_values * self.gamma)
-        )
+        ).float()
 
         # Step ---
         # 7. Compute loss

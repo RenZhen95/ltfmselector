@@ -16,7 +16,7 @@ class Environment:
     def __init__(
             self, X, y, X_bg, fQueryCost, mQueryCost,
             fRepeatQueryCost, p_wNoFCost, errorCost, pType,
-            regression_tol, pModels, device
+            regression_tol, regression_error_rounding, pModels, device
     ):
         '''
         The environment with which the agent interacts, including the actions
@@ -66,6 +66,10 @@ class Environment:
             Only applicable for regression models, punish agent if prediction
             error is bigger than regression_tol
 
+        regression_error_rounding : int
+            Only applicable for regression models. The error between the 
+            prediction and true value is rounded to the input decimal place.
+
         pModels : None or ``list of prediction models``
             Options of prediction models that the agent can choose from.
 
@@ -84,6 +88,7 @@ class Environment:
         self.p_wNoFCost = p_wNoFCost
         self.errorCost = errorCost
         self.regression_tol = regression_tol
+        self.regression_error_rounding = regression_error_rounding
 
         self.device = device
 
@@ -285,7 +290,10 @@ class Environment:
             # Training
             if not self.y_test is None:
                 if self.pType == "regression":
-                    if abs(self.y_pred - self.y_test) < self.regression_tol:
+                    if round(
+                            abs(self.y_pred - self.y_test),
+                            self.regression_error_rounding
+                    ) < self.regression_tol:
                         print("\nCorrect prediction")
                         penalty = 0
                     else:

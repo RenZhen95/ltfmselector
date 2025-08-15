@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 from collections import defaultdict
 
-from env import Environment
-from utils import ReplayMemory, DQN, Transition
+from .env import Environment
+from .utils import ReplayMemory, DQN, Transition
 
 from itertools import count
 

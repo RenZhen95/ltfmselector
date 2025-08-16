@@ -247,32 +247,33 @@ class LTFMSelector:
             r_avr_list = []
             V_avr_list = []
 
-        # Enforce float32
-        X = X.astype(np.float32)
+        # Training dataset
+        self.X = X
+        self.y = y
 
         # Compute background dataset if needed
         if background_dataset is None:
             # Computing background dataset (assuming numerical features)
-            df_train_avg = pd.DataFrame(
+            self.background_dataset = pd.DataFrame(
                 data=np.zeros(X.shape), index=X.index,
                 columns = X.columns
             )
-            for i in df_train_avg.index:
-                df_train_avg.loc[i] = X.drop(i).mean(axis=0)
+            for i in self.background_dataset.index:
+                self.background_dataset.loc[i] = X.drop(i).mean(axis=0)
 
-            df_train_avg.loc["Total", :] = X.mean(axis=0)
+            self.background_dataset.loc["Total", :] = X.mean(axis=0)
         else:
-            df_train_avg = background_dataset
+            self.background_dataset = background_dataset
 
         # Initializing the environment
-        self.env = Environment(
-            X, y, df_train_avg,
+        env = Environment(
+            self.X, self.y, self.background_dataset,
             self.fQueryCost, self.mQueryCost,
             self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
             self.pType, self.regression_tol, self.regression_error_rounding,
             self.pModels, self.device
         )
-        self.env.reset()
+        env.reset()
 
         # Initializing the policy and target networks
         if isinstance(agent_neuralnetwork, nn.Module):
@@ -289,11 +290,11 @@ class LTFMSelector:
                 nLayer2 = agent_neuralnetwork[1]
 
             self.policy_net = DQN(
-                len(self.env.state), len(self.env.actions), nLayer1, nLayer2
+                len(env.state), len(env.actions), nLayer1, nLayer2
             ).to(self.device)
 
             self.target_net = DQN(
-                len(self.env.state), len(self.env.actions), nLayer1, nLayer2
+                len(env.state), len(env.actions), nLayer1, nLayer2
             ).to(self.device)
 
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -308,11 +309,11 @@ class LTFMSelector:
 
         # Training the agent over self.episodes
         if self.max_timesteps is None:
-            self.max_timesteps = self.env.nFeatures * 3
+            self.max_timesteps = env.nFeatures * 3
 
         for i_episode in range(self.episodes):
             print(f"\n\n=== Episode {i_episode+1} === === ===")
-            state = self.env.reset()
+            state = env.reset()
 
             # Convert state to pytorch tensor
             state = torch.tensor(
@@ -321,7 +322,7 @@ class LTFMSelector:
 
             for t in count():
                 # Make agent take an action
-                action = self.select_action(state, self.env)
+                action = self.select_action(state, env)
 
                 if t > self.max_timesteps:
                     action = torch.tensor([[-1]], device=self.device)
@@ -329,7 +330,7 @@ class LTFMSelector:
                 # Agent carries out action on the environment and returns:
                 # - observation (state in next time-step)
                 # - reward
-                observation, reward, terminated = self.env.step(
+                observation, reward, terminated = env.step(
                     action.item(), sample_weight=self.sample_weight, **kwargs
                 )
 
@@ -368,14 +369,14 @@ class LTFMSelector:
 
                 if terminated:
                     doc_episode = {
-                        "SampleID": self.env.X_test.index[0],
-                        "y_true": self.env.y_test,
-                        "y_pred": self.env.y_pred,
-                        "PredModel": self.env.get_prediction_model(),
+                        "SampleID": env.X_test.index[0],
+                        "y_true": env.y_test,
+                        "y_pred": env.y_pred,
+                        "PredModel": env.get_prediction_model(),
                         "Episode": i_episode + 1,
                         "Iterations": t+1,
-                        "Mask": self.env.get_feature_mask(),
-                        "predModel_nChanges": self.env.pm_nChange
+                        "Mask": env.get_feature_mask(),
+                        "predModel_nChanges": env.pm_nChange
                     }
                     doc[i_episode] = doc_episode
 
@@ -404,20 +405,20 @@ class LTFMSelector:
         else:
             return doc
 
-    def predict(self, X, **kwargs):
+    def predict(self, X_test, **kwargs):
         '''
         Use trained agent to select features and a suitable prediction model
-        to predict the target/class, given X.
+        to predict the target/class, given X_test.
 
         Parameters
         ----------
-        X : pd.DataFrame
+        X_test : pd.DataFrame
             Test samples
 
         Returns
         -------
-        y : array
-            Target/Class predicted for X
+        y_pred : array
+            Target/Class predicted for X_test
 
         doc_test : dict
             Log/documentation of each test sample
@@ -426,11 +427,20 @@ class LTFMSelector:
         doc_test = defaultdict(dict)
 
         # Array to store predictions
-        y_pred = np.zeros(X.shape[0])
+        y_pred = np.zeros(X_test.shape[0])
 
-        for i, test_sample in enumerate(X.index):
+        # Initializing the environment
+        env = Environment(
+            self.X, self.y, self.background_dataset,
+            self.fQueryCost, self.mQueryCost,
+            self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
+            self.pType, self.regression_tol, self.regression_error_rounding,
+            self.pModels, self.device
+        )
+
+        for i, test_sample in enumerate(X_test.index):
             print(f"\n\n=== Test sample {test_sample} === === ===")
-            state = self.env.reset(sample=X.loc[[test_sample]])
+            state = env.reset(sample=X.loc[[test_sample]])
 
             # Convert state to pytorch tensor
             state = torch.tensor(
@@ -438,12 +448,12 @@ class LTFMSelector:
             ).unsqueeze(0)
 
             for t in count():
-                action = self.select_action(state, self.env)
+                action = self.select_action(state, env)
 
                 if t > self.max_timesteps:
                     action = torch.tensor([[-1]], device=self.device)
 
-                observation, reward, terminated = self.env.step(
+                observation, reward, terminated = env.step(
                     action.item(), sample_weight=self.sample_weight, **kwargs
                 )
 
@@ -459,10 +469,10 @@ class LTFMSelector:
                 if terminated:
                     doc_episode = {
                         "SampleID": test_sample,
-                        "PredModel": self.env.get_prediction_model(),
+                        "PredModel": env.get_prediction_model(),
                         "Iterations": t+1,
-                        "Mask": self.env.get_feature_mask(),
-                        "predModel_nChanges": self.env.pm_nChange
+                        "Mask": env.get_feature_mask(),
+                        "predModel_nChanges": env.pm_nChange
                     }
                     doc_test[test_sample] = doc_episode
 
@@ -473,7 +483,7 @@ class LTFMSelector:
                         f"- Prediction model           : {doc_episode['PredModel']}\n" +
                         f"- Prediction model #(change) : {doc_episode['predModel_nChanges']}"
                     )
-                    y_pred[i] = self.env.y_pred
+                    y_pred[i] = env.y_pred
                     break
 
         return y_pred, doc_test
@@ -640,3 +650,15 @@ class LTFMSelector:
             res = None
 
         return res
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        print(state.keys())
+
+'''
+# Properties that should have their own save/load function
+self.pModels
+self.policy_net
+self.target_net
+self.optimizer
+'''

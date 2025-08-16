@@ -336,3 +336,9 @@ class Environment:
         Get the selected prediction model and returns its index
         '''
         return int(self.state[-1])
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        print(state.keys())
+
+        del state['pModels']

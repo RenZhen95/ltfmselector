@@ -31,7 +31,7 @@ class SimpleTorchModel():
             self.model.parameters(), lr=5e-5, weight_decay=1.0
         )
 
-        for epoch in range(32):
+        for epoch in range(256):
             y_pred = self.model(
                 torch.from_numpy(X.astype(np.float32))
             )
@@ -57,7 +57,7 @@ def test_save():
     X_train, y_train, X_test, y_test = get_test_data("california_housing")
 
     AgentSelector = LTFMSelector(
-        5, batch_size=8, pType='regression',
+        100, batch_size=128, pType='regression',
         pModels=[SimpleTorchModel(), SVR()]
     )
     # Go for 32000 if we got time

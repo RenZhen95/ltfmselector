@@ -2,7 +2,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+import os
 import random
+import pickle
+import tarfile
 import numpy as np
 import pandas as pd
 from collections import defaultdict
@@ -16,6 +19,53 @@ from sklearn.svm import SVR, SVC
 from sklearn.linear_model import Ridge
 from sklearn.naive_bayes import GaussianNB
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+
+def load_model(filename, default_policy_net=True):
+    '''
+    Load a previously saved model. The list of prediction models will be
+    returned. User should manually load it, see example. This design
+    decision was made to account for users who might work with PyTorch and
+    TensorFlow models which should not be pickled whole.
+
+    Parameter
+    ---------
+    filename : str or Path.pathlib
+
+    default_policy_net : bool
+        If True, user used the default policy network during training
+
+    Returns
+    -------
+    pModels : list(tuple)
+        List of prediction models provided by user during training
+    '''
+    with tarfile.open(filename, 'r:gz') as tar:
+        with tar.extractfile('selector.pkl_ltfmselector') as f:
+            selector = pickle.load(f)
+
+        with tar.extractfile('pModels.pkl_list') as f:
+            pModels = pickle.load(f)
+
+        with tar.extractfile('policy_network_checkpoints.pkl_dict') as f:
+            policy_network_dict = pickle.load(f)
+
+    # Load policy network
+    if default_policy_net:
+        policy_network = DQN(
+            selector.state_length, selector.actions_length,
+            policy_network_dict["n1"],
+            policy_network_dict["n2"]
+        )
+        policy_network.load_state_dict(
+            policy_network_dict[selector.episodes]
+        )
+    selector.policy_net = policy_network
+
+    # Set pModels to None to ENSURE that user, manually sets the prediction
+    # models used earlier.
+    selector.pModels = None
+
+    return selector, pModels
 
 class LTFMSelector:
     def __init__(
@@ -128,12 +178,14 @@ class LTFMSelector:
         self.episodes = episodes
         self.max_timesteps = max_timesteps
         self.checkpoint_interval = checkpoint_interval
+        self.policy_net = None
+        self.policy_network_checkpoints = dict()
 
         if not checkpoint_interval is None:
             if checkpoint_interval > max_timesteps:
                 raise ValueError(
-                    "Invalid value for 'checkpoint_interval', it must be less " +
-                    "than 'max_timesteps'!"
+                    "Invalid value for 'checkpoint_interval', it must be " +
+                    "less than 'max_timesteps'!"
                 )
 
         if not pType in ["regression", "classification"]:
@@ -239,14 +291,6 @@ class LTFMSelector:
                 max{a} Q(s', a), averaged over the sampled batch during
                 training, per iteration
         '''
-        self.sample_weight = sample_weight
-
-        # If user wants to monitor progression of terms in the loss function
-        if returnQ:
-            Q_avr_list = []
-            r_avr_list = []
-            V_avr_list = []
-
         # Training dataset
         self.X = X
         self.y = y
@@ -256,7 +300,7 @@ class LTFMSelector:
             # Computing background dataset (assuming numerical features)
             self.background_dataset = pd.DataFrame(
                 data=np.zeros(X.shape), index=X.index,
-                columns = X.columns
+                columns=X.columns
             )
             for i in self.background_dataset.index:
                 self.background_dataset.loc[i] = X.drop(i).mean(axis=0)
@@ -264,6 +308,14 @@ class LTFMSelector:
             self.background_dataset.loc["Total", :] = X.mean(axis=0)
         else:
             self.background_dataset = background_dataset
+
+        self.sample_weight = sample_weight
+
+        # If user wants to monitor progression of terms in the loss function
+        if returnQ:
+            Q_avr_list = []
+            r_avr_list = []
+            V_avr_list = []
 
         # Initializing the environment
         env = Environment(
@@ -274,6 +326,11 @@ class LTFMSelector:
             self.pModels, self.device
         )
         env.reset()
+
+        # Initializing length of state and actions as public fields for
+        # loading the model later
+        self.state_length = len(env.state)
+        self.actions_length = len(env.actions)
 
         # Initializing the policy and target networks
         if isinstance(agent_neuralnetwork, nn.Module):
@@ -300,7 +357,7 @@ class LTFMSelector:
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
         # Initializing the optimizer
-        self.optimizer = optim.AdamW(
+        optimizer = optim.AdamW(
             self.policy_net.parameters(), lr=lr, amsgrad=True
         )
 
@@ -350,7 +407,8 @@ class LTFMSelector:
                 state = next_state
 
                 # Optimize the model
-                _res = self.optimize_model(loss_function, returnQ)
+                _res = self.optimize_model(optimizer, loss_function, returnQ)
+
                 if returnQ:
                     if not _res is None:
                         Q_avr_list.append(_res[0])
@@ -392,10 +450,12 @@ class LTFMSelector:
             # Saving trained policy network intermediately
             if not self.checkpoint_interval is None:
                 if (i_episode + 1) % self.checkpoint_interval == 0:
-                    torch.save(
-                        self.policy_net.state_dict(),
-                        f"agentPolicy_nE{i_episode + 1}.pt"
-                    )
+                    self.policy_network_checkpoints[i_episode + 1] =\
+                        self.policy_net.state_dict()
+
+            if not self.episodes in self.policy_network_checkpoints:
+                self.policy_network_checkpoints[self.episodes] =\
+                    self.policy_net.state_dict()
 
         if returnQ:
             Q_avr_list.append(_res[0])
@@ -423,12 +483,6 @@ class LTFMSelector:
         doc_test : dict
             Log/documentation of each test sample
         '''
-        # Create dictionary to save information per episode
-        doc_test = defaultdict(dict)
-
-        # Array to store predictions
-        y_pred = np.zeros(X_test.shape[0])
-
         # Initializing the environment
         env = Environment(
             self.X, self.y, self.background_dataset,
@@ -438,9 +492,15 @@ class LTFMSelector:
             self.pModels, self.device
         )
 
+        # Create dictionary to save information per episode
+        doc_test = defaultdict(dict)
+
+        # Array to store predictions
+        y_pred = np.zeros(X_test.shape[0])
+
         for i, test_sample in enumerate(X_test.index):
             print(f"\n\n=== Test sample {test_sample} === === ===")
-            state = env.reset(sample=X.loc[[test_sample]])
+            state = env.reset(sample=X_test.loc[[test_sample]])
 
             # Convert state to pytorch tensor
             state = torch.tensor(
@@ -515,7 +575,7 @@ class LTFMSelector:
             with torch.no_grad():
                 return (self.policy_net(state).max(1)[1].view(1, 1) - 1)
 
-    def optimize_model(self, loss_function, returnQ):
+    def optimize_model(self, optimizer, loss_function, returnQ):
         '''
         Optimize the policy network.
 
@@ -632,14 +692,14 @@ class LTFMSelector:
         loss = criterion(
             state_action_values, expected_state_action_values.unsqueeze(1)
         )
+        optimizer.zero_grad()
 
-        # Optimize the model (policy network)
-        self.optimizer.zero_grad()
+        # Compute gradient via backpropagation
         loss.backward()
-
         # In-place gradient clipping
         torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 1)
-        self.optimizer.step()
+        # Optimize the model (policy network)
+        optimizer.step()
 
         if returnQ:
             Q_avr = state_action_values.detach().numpy().mean()
@@ -651,14 +711,55 @@ class LTFMSelector:
 
         return res
 
+    def save_model(self, filename):
+        '''
+        Save the model. The LTFMSelector object will be pickled, but the
+        prediction models (pModels) and the policy network (policy_net),
+        will be saved separately.
+
+        Parameters
+        ----------
+        filename : str
+        '''
+        # 1. Save the LTFMSelector object
+        with open('selector.pkl_ltfmselector', 'wb') as f:
+            pickle.dump(self, f)
+
+        # 2. Save the prediction models
+        with open('pModels.pkl_list', 'wb') as f:
+            pModels_to_save = []
+
+            for model in self.pModels:
+                if isinstance(model, nn.Module):
+                    pModels_to_save.append("pytorch", model.state_dict())
+                else:
+                    pModels_to_save.append((type(model), model))
+
+            pickle.dump(pModels_to_save, f)
+
+        # 3. Save the weights of the policy network
+        with open('policy_network_checkpoints.pkl_dict', 'wb') as f:
+            self.policy_network_checkpoints["n1"] = self.policy_net.n1
+            self.policy_network_checkpoints["n2"] = self.policy_net.n2
+            pickle.dump(self.policy_network_checkpoints, f)
+
+        # 4. Save all in a tarball
+        with tarfile.open(f"{filename}.tar.gz", 'w:gz') as tar:
+            tar.add('selector.pkl_ltfmselector')
+            tar.add('pModels.pkl_list')
+            tar.add('policy_network_checkpoints.pkl_dict')
+
+        os.remove('selector.pkl_ltfmselector')
+        os.remove('pModels.pkl_list')
+        os.remove('policy_network_checkpoints.pkl_dict')
+
     def __getstate__(self):
         state = self.__dict__.copy()
-        print(state.keys())
 
-'''
-# Properties that should have their own save/load function
-self.pModels
-self.policy_net
-self.target_net
-self.optimizer
-'''
+        del state["pModels"]
+        del state["policy_net"]
+        del state["target_net"]
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)

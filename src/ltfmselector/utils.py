@@ -47,9 +47,11 @@ class DQN(nn.Module):
     '''
     def __init__(self, n_observations, n_actions, n1=1024, n2=1024):
         super(DQN, self).__init__()
-        self.layer1 = nn.Linear(n_observations, n1)
-        self.layer2 = nn.Linear(n1, n2)
-        self.layer3 = nn.Linear(n2, n_actions)
+        self.n1 = n1
+        self.n2 = n2
+        self.layer1 = nn.Linear(n_observations, self.n1)
+        self.layer2 = nn.Linear(self.n1, self.n2)
+        self.layer3 = nn.Linear(self.n2, n_actions)
 
     def forward(self, x):
         x = F.relu(self.layer1(x))

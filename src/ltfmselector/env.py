@@ -16,7 +16,8 @@ class Environment:
     def __init__(
             self, X, y, X_bg, fQueryCost, mQueryCost,
             fRepeatQueryCost, p_wNoFCost, errorCost, pType,
-            regression_tol, regression_error_rounding, pModels, device
+            regression_tol, regression_error_rounding, pModels, device,
+            sample_weight=None, **kwargs
     ):
         '''
         The environment with which the agent interacts, including the actions
@@ -34,7 +35,7 @@ class Environment:
         X_bg : pd.DataFrame
             Background dataaset, pandas dataframe with the shape:
             (n_samples+1, n_features)
-            
+
             An extra row for 'Total', average feature values for all training
             samples
 
@@ -67,7 +68,7 @@ class Environment:
             error is bigger than regression_tol
 
         regression_error_rounding : int
-            Only applicable for regression models. The error between the 
+            Only applicable for regression models. The error between the
             prediction and true value is rounded to the input decimal place.
 
         pModels : None or ``list of prediction models``
@@ -75,6 +76,9 @@ class Environment:
 
         device : ``CPU`` or ``GPU``
             Computation device
+
+        sample_weight : list or array or None
+            Per-sample weights
         '''
         # Datasets
         self.X = X
@@ -91,6 +95,7 @@ class Environment:
         self.regression_error_rounding = regression_error_rounding
 
         self.device = device
+        self.sample_weight = sample_weight
 
         # Available prediction models
         self.pType = pType
@@ -105,6 +110,14 @@ class Environment:
 
         # Counter for prediction model change
         self.pm_nChange = 0
+
+        ### Special-tailored implementation ###
+        if "smsproject" in list(kwargs.keys()):
+            self.smsproject = True
+        else:
+            self.smsproject = False
+
+        self.y_pred_bg = self.get_bgPrediction()
 
         self.state = None
 
@@ -167,7 +180,7 @@ class Environment:
 
         return self.state
 
-    def step(self, action, sample_weight=None, **kwargs):
+    def step(self, action):
         '''
         Agent carries out an action.
 
@@ -177,9 +190,6 @@ class Environment:
             = -1 (make a prediction with selected features and prediction model)
             = int : [0, n_features] (query a feature)
             = int : [n_features, n_features + n_model] (query a prediction model)
-
-        sample_weight : list or array or None
-            Per-sample weights
         '''
         # === === === ===
         # Query a feature
@@ -229,13 +239,14 @@ class Environment:
             # Punish agent if it decides to predict without selecting any
             # features
             if len(col_to_retain) == 0:
+                self.y_pred = self.y_pred_bg[int(self.state[-1])]
                 return [None, -self.p_wNoFCost, True]
 
             # === === === ===
             # Make a prediction with selected features and prediction model
 
             ### Special-tailored implementation ###
-            if "smsproject" in list(kwargs.keys()):
+            if self.smsproject:
                 testpatientID = getPatientID(X_test.index[0])
                 otherSP_of_testPatient = [
                     sp for sp in X_train.index if getPatientID(sp) == testpatientID
@@ -254,13 +265,15 @@ class Environment:
             selected_predModel = self.pModels[int(self.state[-1])]
 
             ### Special-tailored implementation ###
-            if "smsproject" in list(kwargs.keys()):
+            if self.smsproject:
                 X_train_wLabel = X_train.copy()
                 X_train_wLabel["Target"] = self.y.loc[X_train_wLabel.index]
 
-                sample_weight = balance_classDistribution_patient(
+                _weights = balance_classDistribution_patient(
                     X_train_wLabel, "Target"
                 ).to_numpy(dtype=np.float32)[:,0]
+            else:
+                _weights = self.sample_weight
 
             # Convert X_train and y_train into numpy arrays if they are Pandas
             # DataFrame or Series
@@ -273,16 +286,16 @@ class Environment:
             if isinstance(X_test, pd.DataFrame):
                 X_test = X_test.values
 
-            if sample_weight is None:
+            if _weights is None:
                 selected_predModel.fit(X_train, y_train)
             else:
                 selected_predModel.fit(
-                    X_train, y_train, sample_weight=sample_weight
+                    X_train, y_train, sample_weight=_weights
                 )
-                
+
             self.y_pred = selected_predModel.predict(X_test)[0]
 
-            if "smsproject" in list(kwargs.keys()):
+            if self.smsproject:
                 # Capping values between 0 and 3
                 self.y_pred = capUpperValues(self.y_pred)
                 self.y_pred = capLowerValues(self.y_pred)
@@ -336,6 +349,54 @@ class Environment:
         Get the selected prediction model and returns its index
         '''
         return int(self.state[-1])
+
+    def get_bgPrediction(self):
+        '''
+        Get prediction based on background dataset for each type of
+        prediction model, fitted with the training samples, to be used
+        for the case that the agent decides to make a prediction without
+        any recruited features.
+        '''
+        # Initialize map between model type with background prediction
+        yBg_Model = []
+
+        ### Special-tailored implementation ###
+        if self.smsproject:
+            X_train_wLabel = self.X.copy()
+            X_train_wLabel["Target"] = self.y.loc[X_train_wLabel.index]
+
+            _weights = balance_classDistribution_patient(
+                X_train_wLabel, "Target"
+            ).to_numpy(dtype=np.float32)[:,0]
+        else:
+            _weights = self.sample_weight
+
+        # DataFrame or Series -> convert to numpy arrays
+        if isinstance(self.X, pd.DataFrame):
+            _X = self.X.values
+
+        if isinstance(self.y, pd.Series):
+            _y = self.y.values
+
+        for m in self.pModels:
+            # Fit each prediction model with the entire dataset
+            if _weights is None:
+                m.fit(_X, _y)
+            else:
+                m.fit(_X, _y, sample_weight=_weights)
+
+            # Use fitted model to make a prediction based on background
+            # dataset
+            yBg_Model.append(
+                m.predict(self.X_bg.loc[["Total"]])[0]
+            )
+
+            # Capping values between 0 and 3
+            if self.smsproject:
+                yBg_Model[-1] = capUpperValues(yBg_Model[-1])
+                yBg_Model[-1] = capLowerValues(yBg_Model[-1])
+
+        return yBg_Model
 
     def __getstate__(self):
         state = self.__dict__.copy()

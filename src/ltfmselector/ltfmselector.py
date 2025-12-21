@@ -120,7 +120,7 @@ class LTFMSelector:
 
             If pType == 'regression', then
             Agent is punished -errorCost*abs(``prediction`` - ``target``)
-            
+
             If pType == 'classification', then
             Agent is punished -errorCost
 
@@ -132,7 +132,7 @@ class LTFMSelector:
             error is bigger than regression_tol
 
         regression_error_rounding : int (default = 1)
-            Only applicable for regression models. The error between the 
+            Only applicable for regression models. The error between the
             prediction and true value is rounded to the input decimal place.
 
         pModels : None or ``list of prediction models``
@@ -142,7 +142,7 @@ class LTFMSelector:
             1. Support Vector Machine
             2. Random Forest
             3. Gaussian Naive Bayes
-            
+
             For regression:
             1. Support Vector Machine
             2. Random Forest
@@ -160,7 +160,7 @@ class LTFMSelector:
             Maximum number of time-steps per episode. Agent will be forced to
             make a prediction with the selected features and prediction model,
             if max_timesteps is reached
-            
+
             If None, max_timesteps will be set to 3 x number_of_features
 
         checkpoint_interval : int or None
@@ -255,7 +255,7 @@ class LTFMSelector:
             integer elements (n1, n2). n1 and n2 pertains to the number of units
             in the first and second layer of a multilayer-perceptron,
             implemented in PyTorch.
-            
+
             If None, a default multilayer-perceptron of two hidden layers, each
             with 1024 units is used.
 
@@ -284,10 +284,10 @@ class LTFMSelector:
                 List of policy network's action-value function, Q(s,a),
                 averaged over the sampled batch during training, per iteration
             r_avr_list : list
-                List of rewards, r, averaged over the sampled batch during 
+                List of rewards, r, averaged over the sampled batch during
                 training, per iteration
             V_avr_list : list
-                List of max action-value function for the next state (s'), 
+                List of max action-value function for the next state (s'),
                 max{a} Q(s', a), averaged over the sampled batch during
                 training, per iteration
         '''
@@ -323,7 +323,8 @@ class LTFMSelector:
             self.fQueryCost, self.mQueryCost,
             self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
             self.pType, self.regression_tol, self.regression_error_rounding,
-            self.pModels, self.device
+            self.pModels, self.device, sample_weight=self.sample_weight,
+            **kwargs
         )
         env.reset()
 
@@ -387,9 +388,7 @@ class LTFMSelector:
                 # Agent carries out action on the environment and returns:
                 # - observation (state in next time-step)
                 # - reward
-                observation, reward, terminated = env.step(
-                    action.item(), sample_weight=self.sample_weight, **kwargs
-                )
+                observation, reward, terminated = env.step(action.item())
 
                 if terminated:
                     next_state = None
@@ -489,7 +488,7 @@ class LTFMSelector:
             self.fQueryCost, self.mQueryCost,
             self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
             self.pType, self.regression_tol, self.regression_error_rounding,
-            self.pModels, self.device
+            self.pModels, self.device, **kwargs
         )
 
         # Create dictionary to save information per episode
@@ -513,9 +512,7 @@ class LTFMSelector:
                 if t > self.max_timesteps:
                     action = torch.tensor([[-1]], device=self.device)
 
-                observation, reward, terminated = env.step(
-                    action.item(), sample_weight=self.sample_weight, **kwargs
-                )
+                observation, reward, terminated = env.step(action.item())
 
                 if terminated:
                     next_state = None
@@ -603,8 +600,8 @@ class LTFMSelector:
         # 1. Draw a random batch of experiences
         experiences = self.ReplayMemory.sample(self.batch_size)
         # [
-        #    Experience #1: (state, action, next_state, reward), 
-        #    Experience #2: (state, action, next_state, reward), 
+        #    Experience #1: (state, action, next_state, reward),
+        #    Experience #2: (state, action, next_state, reward),
         #    ...
         # ]
 
@@ -688,7 +685,7 @@ class LTFMSelector:
                 criterion = nn.SmoothL1Loss()
         else:
             criterion = loss_function
-            
+
         loss = criterion(
             state_action_values, expected_state_action_values.unsqueeze(1)
         )

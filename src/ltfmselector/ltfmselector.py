@@ -327,7 +327,7 @@ class LTFMSelector:
         # If user wants to save average computed action-value functions and
         # rewards of sampled batches
         if returnQ:
-            total_iterations = 10000000000
+            total_iterations = 16777216 # 2^24
             LearningValuesMatrix = np.zeros(
                 (total_iterations, 3), dtype=np.float32
             )

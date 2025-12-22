@@ -11,3 +11,10 @@ wheels/
 .venv
 uv.lock
 .python-version
+
+# PyTorch
+runs*
+
+# Dev
+predictionModels.py
+stdutils

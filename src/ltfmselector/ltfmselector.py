@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.tensorboard import SummaryWriter
 
 import os
 import random
@@ -226,7 +227,7 @@ class LTFMSelector:
     def fit(
             self, X, y, loss_function='mse', sample_weight=None,
             agent_neuralnetwork=None, lr=1e-5, returnQ=False,
-            background_dataset=None, **kwargs
+            monitor=False, background_dataset=None, **kwargs
     ):
         '''
         Initializes the environment and agent, then trains the agent to select
@@ -266,6 +267,12 @@ class LTFMSelector:
         returnQ : bool
             Return average computed action-value functions and rewards of
             the sampled batches, for debugging purposes.
+
+        monitor : bool
+            Monitor training process using a TensorBoard.
+
+            Run `tensorboard --logdir=runs` in the terminal to monitor the p
+            progression of the action-value function.
 
         background_dataset : None or pd.DataFrame
             If None, numerical features will be assumed when computing the
@@ -312,10 +319,18 @@ class LTFMSelector:
         self.sample_weight = sample_weight
 
         # If user wants to monitor progression of terms in the loss function
+        if monitor:
+            writer = SummaryWriter()
+            monitor_count = 1
+
+        # If user wants to save average computed action-value functions and
+        # rewards of sampled batches
         if returnQ:
-            Q_avr_list = []
-            r_avr_list = []
-            V_avr_list = []
+            total_iterations = 1000000
+            Q_avr_array = np.zeros(total_iterations, dtype=np.float32)
+            r_avr_array = np.zeros(total_iterations, dtype=np.float32)
+            V_avr_array = np.zeros(total_iterations, dtype=np.float32)
+            Q_count = 1
 
         # Initializing the environment
         env = Environment(
@@ -406,13 +421,20 @@ class LTFMSelector:
                 state = next_state
 
                 # Optimize the model
-                _res = self.optimize_model(optimizer, loss_function, returnQ)
+                _res = self.optimize_model(optimizer, loss_function, monitor, returnQ)
+
+                if monitor:
+                    if not _res is None:
+                        writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
+                        writer.add_scalar("Metrics/Average_Reward", _res[1], monitor_count)
+                        writer.add_scalar("Metrics/Average_Target", _res[2], monitor_count)
+                        monitor_count += 1
 
                 if returnQ:
                     if not _res is None:
-                        Q_avr_list.append(_res[0])
-                        r_avr_list.append(_res[1])
-                        V_avr_list.append(_res[2])
+                        Q_avr_array[Q_count] = _res[0]
+                        r_avr_array[Q_count] = _res[1]
+                        V_avr_array[Q_count] = _res[2]
 
                 # Apply soft update to target network's weights
                 targetParameters = self.target_net.state_dict()
@@ -456,11 +478,19 @@ class LTFMSelector:
                 self.policy_network_checkpoints[self.episodes] =\
                     self.policy_net.state_dict()
 
+        if monitor:
+            writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
+            writer.add_scalar("Metrics/Average_Reward", _res[1], monitor_count)
+            writer.add_scalar("Metrics/Average_Target", _res[2], monitor_count)
+            writer.close()
+
         if returnQ:
-            Q_avr_list.append(_res[0])
-            r_avr_list.append(_res[1])
-            V_avr_list.append(_res[2])
-            return doc, (Q_avr_list, r_avr_list, V_avr_list)
+            Q_avr_array[Q_count] = _res[0]
+            r_avr_array[Q_count] = _res[1]
+            V_avr_array[Q_count] = _res[2]
+
+        if (monitor or returnQ):
+            return doc, (Q_avr_array, r_avr_array, V_avr_array)
         else:
             return doc
 
@@ -572,7 +602,7 @@ class LTFMSelector:
             with torch.no_grad():
                 return (self.policy_net(state).max(1)[1].view(1, 1) - 1)
 
-    def optimize_model(self, optimizer, loss_function, returnQ):
+    def optimize_model(self, optimizer, loss_function, monitor, returnQ):
         '''
         Optimize the policy network.
 
@@ -698,7 +728,7 @@ class LTFMSelector:
         # Optimize the model (policy network)
         optimizer.step()
 
-        if returnQ:
+        if (monitor or returnQ):
             Q_avr = state_action_values.detach().numpy().mean()
             r_avr = reward_batch.unsqueeze(1).numpy().mean()
             V_avr = expected_state_action_values.unsqueeze(1).numpy().mean()

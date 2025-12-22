@@ -266,7 +266,8 @@ class LTFMSelector:
 
         returnQ : bool
             Return average computed action-value functions and rewards of
-            the sampled batches, for debugging purposes.
+            the sampled batches, as a (<total_iterations>, 3) matrix. The 
+            columns correspond to the averaged Q, reward, and target functions.
 
         monitor : bool
             Monitor training process using a TensorBoard.
@@ -326,10 +327,10 @@ class LTFMSelector:
         # If user wants to save average computed action-value functions and
         # rewards of sampled batches
         if returnQ:
-            total_iterations = 1000000
-            Q_avr_array = np.zeros(total_iterations, dtype=np.float32)
-            r_avr_array = np.zeros(total_iterations, dtype=np.float32)
-            V_avr_array = np.zeros(total_iterations, dtype=np.float32)
+            total_iterations = 10000000000
+            LearningValuesMatrix = np.zeros(
+                (total_iterations, 3), dtype=np.float32
+            )
             Q_count = 1
 
         # Initializing the environment
@@ -432,9 +433,10 @@ class LTFMSelector:
 
                 if returnQ:
                     if not _res is None:
-                        Q_avr_array[Q_count] = _res[0]
-                        r_avr_array[Q_count] = _res[1]
-                        V_avr_array[Q_count] = _res[2]
+                        LearningValuesMatrix[Q_count, 0] = _res[0]
+                        LearningValuesMatrix[Q_count, 1] = _res[1]
+                        LearningValuesMatrix[Q_count, 2] = _res[2]
+                        Q_count += 1
 
                 # Apply soft update to target network's weights
                 targetParameters = self.target_net.state_dict()
@@ -485,12 +487,12 @@ class LTFMSelector:
             writer.close()
 
         if returnQ:
-            Q_avr_array[Q_count] = _res[0]
-            r_avr_array[Q_count] = _res[1]
-            V_avr_array[Q_count] = _res[2]
+            LearningValuesMatrix[Q_count, 0] = _res[0]
+            LearningValuesMatrix[Q_count, 1] = _res[1]
+            LearningValuesMatrix[Q_count, 2] = _res[2]
 
         if (monitor or returnQ):
-            return doc, (Q_avr_array, r_avr_array, V_avr_array)
+            return doc, LearningValuesMatrix[0:Q_count+1, :]
         else:
             return doc
 

@@ -72,7 +72,9 @@ class LTFMSelector:
     def __init__(
             self, episodes, batch_size=256, tau=0.0005,
             eps_start=0.9, eps_end=0.05, eps_decay=1000,
-            fQueryCost=0.01, mQueryCost=0.01,
+            fQueryCost=0.01, fQueryFunction=None,
+            fThreshold=None, fCap=None, fRate=None,
+            mQueryCost=0.01,
             fRepeatQueryCost=1.0, p_wNoFCost=5.0, errorCost=1.0,
             pType="regression", regression_tol=0.5,
             regression_error_rounding=1,
@@ -105,7 +107,32 @@ class LTFMSelector:
             Rate of exponential decay
 
         fQueryCost : float
-            Cost of querying a feature
+            Cost of querying a feature.
+
+        fQueryFunction : None or {'step', 'linear', 'quadratic'}
+            User can also decide to progressively increase the cost of 
+            querying features in the following manner:
+            'step' : 
+                Every additional feature adds a fixed constant, determined 
+                by user.
+            'linear' : 
+                Cost of every additional feature linearly increases according    
+                to user-defined gradient
+            'quadratic' : 
+                Cost of every additional feature increases quadratically, 
+                according to a user-defined rate
+
+        fThreshold : None or int
+            If `fQueryFunction == {'step', 'linear', 'quadratic', 'exponential'}`
+            Threshold of number of features, before cost of recruiting 
+            increases
+            
+        fCap : None or float
+            If `fQueryFunction == {'step'}`, upper limit of penalty
+
+        fRate : None or float
+            If `fQueryFunction == {'linear', 'quadratic', 'exponential'}`, rate
+            individual cost functions
 
         mQueryCost : float
             Cost of querying a prediction model
@@ -196,6 +223,35 @@ class LTFMSelector:
 
         # Reward function
         self.fQueryCost = fQueryCost
+        self.fQueryFunction = fQueryFunction
+        self.fThreshold = fThreshold
+        self.fCap = fCap
+        self.fRate = fRate
+
+        # Options for progressive cost functions
+        if isinstance(self.fQueryFunction, str):
+            fQueryFunctions = ['step', 'linear', 'quadratic']
+            if not self.fQueryFunction in fQueryFunctions:
+                raise ValueError(
+                    f"{self.fQueryFunction} is not a valid option. Available " +
+                    f"options are {fQueryFunctions}"
+                )
+            else:
+                if not isinstance(fThreshold, int):
+                    raise ValueError("Parameter fThreshold must be an integer!")
+
+                if self.fQueryFunction == "step":
+                    if not (instance(fCap, float) or instance(fCap, int)):
+                        raise ValueError("Parameter fCap must be an int or float!")
+                    else:
+                        self.fCap = float(fCap)
+                else:
+                    if self.fQueryFunction in ["linear", "quadratic"]:
+                        if not (instance(fRate, float) or instance(fRate, int)):
+                            raise ValueError("Parameter fRate must be an int or float!")
+                        else:
+                            self.fRate = float(fRate)
+
         self.mQueryCost = mQueryCost
         self.fRepeatQueryCost = fRepeatQueryCost
         self.p_wNoFCost = p_wNoFCost
@@ -336,7 +392,9 @@ class LTFMSelector:
         # Initializing the environment
         env = Environment(
             self.X, self.y, self.background_dataset,
-            self.fQueryCost, self.mQueryCost,
+            self.fQueryCost, self.fQueryFunction,
+            self.fThreshold, self.fCap, self.fRate,
+            self.mQueryCost,
             self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
             self.pType, self.regression_tol, self.regression_error_rounding,
             self.pModels, self.device, sample_weight=self.sample_weight,
@@ -484,6 +542,7 @@ class LTFMSelector:
             writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
             writer.add_scalar("Metrics/Average_Reward", _res[1], monitor_count)
             writer.add_scalar("Metrics/Average_Target", _res[2], monitor_count)
+            writer.flush()
             writer.close()
 
         if returnQ:
@@ -517,7 +576,9 @@ class LTFMSelector:
         # Initializing the environment
         env = Environment(
             self.X, self.y, self.background_dataset,
-            self.fQueryCost, self.mQueryCost,
+            self.fQueryCost, self.fQueryFunction,
+            self.fThreshold, self.fCap, self.fRate,
+            self.mQueryCost,
             self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
             self.pType, self.regression_tol, self.regression_error_rounding,
             self.pModels, self.device, **kwargs

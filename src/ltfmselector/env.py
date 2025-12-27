@@ -14,7 +14,10 @@ capLowerValues = lambda x: 0.0 if x < 0.0 else x
 
 class Environment:
     def __init__(
-            self, X, y, X_bg, fQueryCost, mQueryCost,
+            self, X, y, X_bg,
+            fQueryCost, fQueryFunction,
+            fThreshold, fCap, fRate,
+            mQueryCost,
             fRepeatQueryCost, p_wNoFCost, errorCost, pType,
             regression_tol, regression_error_rounding, pModels, device,
             sample_weight=None, **kwargs
@@ -41,6 +44,21 @@ class Environment:
 
         fQueryCost : float
             Cost of querying a feature
+
+        fQueryFunction : None or {'step', 'linear', 'quadratic', 'exponential'}
+            Function to progressively increase cost of recruiting a feature
+
+        fThreshold : None or int
+            If `fQueryFunction == {'step', 'linear', 'quadratic', 'exponential'}`
+            Threshold of number of features, before cost of recruiting 
+            increases
+            
+        fCap : None or float
+            If `fQueryFunction == {'step'}`, upper limit of penalty
+
+        fRate : None or float
+            If `fQueryFunction == {'linear', 'quadratic', 'exponential'}`, rate
+            individual cost functions
 
         mQueryCost : float
             Cost of querying a prediction model
@@ -87,6 +105,11 @@ class Environment:
 
         # Reward functions
         self.fQueryCost = fQueryCost
+        self.fQueryFunction = fQueryFunction
+        self.fThreshold = fThreshold
+        self.fCap = fCap
+        self.fRate = fRate
+
         self.mQueryCost = mQueryCost
         self.fRepeatQueryCost = fRepeatQueryCost
         self.p_wNoFCost = p_wNoFCost
@@ -204,7 +227,7 @@ class Environment:
                 self.state[action] = self.X_test.iloc[0, action]
 
                 # Punish for querying a feature
-                return [self.state, -self.fQueryCost, False]
+                return [self.state, -self.get_fQueryCost(), False]
 
             # Punish agent for attempting to query a feature already
             # previously selected
@@ -330,6 +353,44 @@ class Environment:
                 print(f"Prediction: {self.y_pred}\n")
 
                 return [None, 0.0, True]
+
+    def get_fQueryCost(self):
+        '''
+        Get cost of querying a feature
+        '''
+        if self.fQueryFunction is None:
+            return self.fQueryCost
+
+        # Get number of total recruited features
+        nFSubset = (self.get_feature_mask()).sum()
+
+        if self.fQueryCost == "step":
+            return self.get_fQueryCostStep(nFSubset)
+        elif self.fQueryCost == "linear":
+            return self.get_fQueryCostLinear(nFSubset)
+        elif self.fQueryCost == "quadratic":
+            return self.get_fQueryCostQuadratic(nFSubset)
+
+    def get_fQueryCostStep(self, _nFSubset):
+        '''Step function for querying feature'''
+        if _nFSubset > self.fThreshold:
+            return self.fCap
+        else:
+            return self.fQueryCost
+
+    def get_fQueryCostLinear(self, _nFSubset):
+        '''Linear function for querying feature'''
+        return max(
+            self.fQueryCost,
+            self.fQueryCost + self.fRate*(_nFSubset-self.fThreshold)
+        )
+
+    def get_fQueryCostQuadratic(self, _nFSubset):
+        '''Quadratic function for querying feature'''
+        if _nFSubset > self.fThreshold:
+            return self.fQueryCost + self.fRate*(_nFSubset-self.fThreshold)**2
+        else:
+            return self.fQueryCost
 
     def get_feature_mask(self):
         '''

@@ -241,13 +241,13 @@ class LTFMSelector:
                     raise ValueError("Parameter fThreshold must be an integer!")
 
                 if self.fQueryFunction == "step":
-                    if not (instance(fCap, float) or instance(fCap, int)):
+                    if not (isinstance(fCap, float) or isinstance(fCap, int)):
                         raise ValueError("Parameter fCap must be an int or float!")
                     else:
                         self.fCap = float(fCap)
                 else:
                     if self.fQueryFunction in ["linear", "quadratic"]:
-                        if not (instance(fRate, float) or instance(fRate, int)):
+                        if not (isinstance(fRate, float) or isinstance(fRate, int)):
                             raise ValueError("Parameter fRate must be an int or float!")
                         else:
                             self.fRate = float(fRate)

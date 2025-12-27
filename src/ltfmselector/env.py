@@ -364,11 +364,11 @@ class Environment:
         # Get number of total recruited features
         nFSubset = (self.get_feature_mask()).sum()
 
-        if self.fQueryCost == "step":
+        if self.fQueryFunction == "step":
             return self.get_fQueryCostStep(nFSubset)
-        elif self.fQueryCost == "linear":
+        elif self.fQueryFunction == "linear":
             return self.get_fQueryCostLinear(nFSubset)
-        elif self.fQueryCost == "quadratic":
+        elif self.fQueryFunction == "quadratic":
             return self.get_fQueryCostQuadratic(nFSubset)
 
     def get_fQueryCostStep(self, _nFSubset):

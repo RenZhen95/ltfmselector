@@ -18,3 +18,4 @@ runs*
 # Dev
 predictionModels.py
 stdutils
+examples/train.py

@@ -18,6 +18,8 @@ runs*
 # Dev
 predictionModels.py
 stdutils
+examples/train.py
+RBRHX_ModalScores.xlsx
 
 # LaTeX
 *converted-to.pdf

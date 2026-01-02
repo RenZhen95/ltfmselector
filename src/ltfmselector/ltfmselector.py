@@ -128,10 +128,11 @@ class LTFMSelector:
             increases
             
         fCap : None or float
-            If `fQueryFunction == {'step'}`, upper limit of penalty
+            If `fQueryFunction == {'step', 'linear', 'quadratic'}`, upper 
+            limit of penalty
 
         fRate : None or float
-            If `fQueryFunction == {'linear', 'quadratic', 'exponential'}`, rate
+            If `fQueryFunction == {'linear', 'quadratic'}`, rate of
             individual cost functions
 
         mQueryCost : float

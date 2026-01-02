@@ -364,6 +364,7 @@ class Environment:
         # Get number of total recruited features
         nFSubset = (self.get_feature_mask()).sum()
 
+        # DEV:: If more than 10 statements, implement dictionary instead
         if self.fQueryFunction == "step":
             return self.get_fQueryCostStep(nFSubset)
         elif self.fQueryFunction == "linear":
@@ -380,17 +381,26 @@ class Environment:
 
     def get_fQueryCostLinear(self, _nFSubset):
         '''Linear function for querying feature'''
-        return max(
+        _qC = max(
             self.fQueryCost,
             self.fQueryCost + self.fRate*(_nFSubset-self.fThreshold)
         )
+        if not self.fCap is None:
+            return min(self.fCap, _qC)
+        else:
+            return _qC
 
     def get_fQueryCostQuadratic(self, _nFSubset):
         '''Quadratic function for querying feature'''
         if _nFSubset > self.fThreshold:
-            return self.fQueryCost + self.fRate*(_nFSubset-self.fThreshold)**2
+            _qC = self.fQueryCost + self.fRate*(_nFSubset-self.fThreshold)**2
         else:
-            return self.fQueryCost
+            _qC = self.fQueryCost
+
+        if not self.fCap is None:
+            return min(self.fCap, _qC)
+        else:
+            return _qC
 
     def get_feature_mask(self):
         '''

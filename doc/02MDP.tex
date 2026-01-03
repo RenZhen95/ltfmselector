@@ -1,12 +1,10 @@
-The \emph{environment} is represented by the state $\nvec{s}_t$ at the current time-step $t$. The agent then performs an \emph{action} $a_t$ according to a learned \emph{policy} $\policy$, which results in the current state $\nvec{s}_t$ evolving to the \emph{next state} $\nvec{s}_{t+1}$, and the agent receiving an appropriate \emph{reward} $R_{t+1} \in \mathbb{R}$ one time-step later \cite{sutton2018,brunton2022}. These collectively form an \emph{experience} $\boldsymbol{e}_t$, which describes the knowledge an agent has amassed from interacting with the environment, usually expressed for a given time-step $t$ as a tuple $\boldsymbol{e}_t = \left( \nvec{s}_t \, , a_t \, , \nvec{s}_{t+1} \, , R_{t+1} \right)$ \cite{almahamid2021}. The agent-environment interaction thereby yields a \emph{trajectory}, as shown in (\ref{eq:Trajectory}) \cite{sutton2018}
+The environment is represented by the state $\nvec{s}_t$ at the current time-step $t$. The agent then performs an action $a_t$ according to a learned policy $\policy$, which results in the current state $\nvec{s}_t$ evolving to the next state $\nvec{s}_{t+1}$, and the agent receiving an appropriate reward $R_{t+1} \in \mathbb{R}$ one time-step later \cite{sutton2018,brunton2022}. These collectively form an \emph{experience} $\boldsymbol{e}_t$, which describes the knowledge an agent has amassed from interacting with the environment, usually expressed for a given time-step $t$ as a tuple $\boldsymbol{e}_t = \left( \nvec{s}_t \, , a_t \, , \nvec{s}_{t+1} \, , R_{t+1} \right)$ \cite{almahamid2021}. The agent-environment interaction thereby yields a \emph{trajectory}, as shown in (\ref{eq:Trajectory}) \cite{sutton2018,brunton2022}
 \begin{equation}
-    \nvec{s}_0 \,, a_0 \,, R_1 \,, \nvec{s}_1 \,, a_1 \,, R_2 \,, \nvec{s}_2 \,, a_2 \,, R_3 \,, \cdots \,,
-    \label{eq:Trajectory}
-\end{equation}
-or in terms of experiences \cite{brunton2022}
-\begin{equation}
-    \boldsymbol{e}_0 \,, \boldsymbol{e}_1 \,, \boldsymbol{e}_2 \,, \cdots \,.
-    \label{eq:TrajectoryExperiences}
+  \begin{aligned}
+    \nvec{s}_0 \,, a_0 \,, R_1 \,, & & \nvec{s}_1 \,, a_1 \,, R_2 \,, & & \nvec{s}_2 \,, a_2 \,, R_3 \,, \cdots \,, \\
+    \boldsymbol{e}_0 \,, & & \boldsymbol{e}_1 \,, & & \boldsymbol{e}_2 \,, \cdots \,.
+  \end{aligned}
+  \label{eq:Trajectory}
 \end{equation}
 Formally described, the environment evolves according to a \emph{Markov decision process} (MDP), where the random variables $R_t \in \mathcal{R}$ and $\nvec{s}_{t} \in \mathcal{S}$ each have defined discrete probability distributions, that depend only on the preceding state and action, and not other previous states or hidden variables \cite{sutton2018,brunton2022}. Specifically, the probability of particular values of these random variables $r \in \mathcal{R} \in \mathbb{R}$ and $\nvec{s}' \in \mathcal{S}$ at the next time-step $t+1$, given the state $\nvec{s}$ and action $a$ at the current time-step $t$, is given as
 \begin{equation}
@@ -18,25 +16,23 @@ The expected reward given a state-action pair can in turn be computed with (\ref
     r(\nvec{s}, a) = \mathbb{E} \left[ R_{t+1} \,|\, \nvec{s}_{t}=\nvec{s}, a_t = a \right] = \sum_{r \in \mathcal{R}} r \sum_{\nvec{s}' \in \mathcal{S}} P(\nvec{s}', r \,|\, \nvec{s}, a) \,.
     \label{eq:RewardFunction}
 \end{equation}
-Depending on the application, ``time-steps'' does not necessarily have to be fixed intervals of real time, but may include successive stages of decision making.
-
-In short, the goal of RL is to maximize the sum of rewards in the long run \cite{sutton2018}. Formally, this can be described as maximizing the expected discounted \emph{return} as defined in (\ref{eq:Return})
+In short, the goal of RL is to maximize the sum of rewards in the long run \cite{sutton2018}. Formally, this is described as maximizing the expected discounted \emph{return} as defined in (\ref{eq:Return})
 \begin{equation}
   G_{t} = R_{t+1} + \gamma R_{t+2} + \gamma^{2} R_{t+3} + \cdots = \sum_{k=0}^{\infty} \gamma^{k} R_{t+1+k} \,,
   \label{eq:Return}
 \end{equation}
-where $\gamma$ denotes the \emph{discount rate} \cite{sutton2018,brunton2022}. For the agent to learn a policy that maximizes the return $G$, it is necessary for the agent to be able to gauge the ``desirability'' of being in a given state $\nvec{s}_t$, which can be quantified via the \emph{value function} (\ref{eq:ValueFunction})
+where $\gamma$ denotes the \emph{discount rate} \cite{sutton2018,brunton2022}. To learn a policy that maximizes the return $G$, the ``desirability'' of being in a given state $\nvec{s}_t$ must be quantified. This is achieved via the \emph{value function} (\ref{eq:ValueFunction})
 \begin{equation}
     \begin{split}
       V_{\policy} (\nvec{s}) &= \mathbb{E}_{\policy} \left[ G_{t} \left. \, \right\rvert \, \nvec{s}_t = \nvec{s} \right] \\
                             &= \mathbb{E}_{\policy} \left[ R_{t+1} + \gamma G_{t+1} \left. \, \right\rvert \, \nvec{s}_t = \nvec{s} \right] \\
                              &= \sum_{a} \policy(a \,|\, \nvec{s}) \sum_{\nvec{s}'} \sum_{r} P(\nvec{s}', r \,|\, \nvec{s}, a) \left[ r + \gamma\mathbb{E}_{\policy} \left[ G_{t+1}|\nvec{s}_{t+1}=\nvec{s}' \right] \right] \\
                              &= \sum_{a} \policy(a \,|\, \nvec{s}) \sum_{\nvec{s}', r} P(\nvec{s}', r \,|\, \nvec{s}, a) \left[ r + \gamma V_{\policy}(\nvec{s}') \right] \,,
-                               \text{ for all } \nvec{s} \in \mathcal{S} \,.
+                               \text{ for all } \nvec{s} \in \mathcal{S} \, ,
     \end{split}
     \label{eq:ValueFunction}
 \end{equation}
-(\ref{eq:ValueFunction}) describes the expected discounted return when starting from $\nvec{s}$, and following $\policy$ thereafter \cite{sutton2018}. The optimal policy can thus be rewritten in terms of the value function as 
+which describes the expected discounted return when starting from $\nvec{s}$, and following $\policy$ thereafter \cite{sutton2018}. The optimal policy can thus be rewritten in terms of the value function as 
 \begin{equation}
     \begin{split}
         V_{\optpolicy} (\nvec{s}) &= \max_{a} \mathbb{E} \left[R_{t+1} + \gamma V_{\optpolicy}(\nvec{s}') \, \rvert \, \nvec{s}_{t}=\nvec{s} \,, a_{t}=a \right] \\
@@ -44,15 +40,8 @@ where $\gamma$ denotes the \emph{discount rate} \cite{sutton2018,brunton2022}. F
     \end{split}
     \label{eq:BellmanEq}
 \end{equation}
-Equation (\ref{eq:BellmanEq}), also known as the \emph{Bellman equation} can be broken down and recursively written for every subsequence of steps. This property is crucial because it implies that a control policy for a multi-step procedure must also be locally optimal for every subsequence of steps, thus allowing for a large optimization problem to be solved by recursively dividing and locally optimizing entire sequence \cite{bellman1966,sutton2018,brunton2022}
+Equation (\ref{eq:BellmanEq}) is also known as the \emph{Bellman equation}, which has an important property of being recursively written for every subsequence of steps. This implies that a control policy for a multi-step procedure must also be locally optimal for every subsequence of steps, thus allowing for a large optimization problem to be solved by locally optimizing every subsequence \cite{bellman1966,sutton2018,brunton2022}. The discount factor $\gamma$ guides the agent towards learning a behavior that balances the trade-off between immediate gratification and long-term strategic gains \cite{sutton2018}. Taking chess for instance, where the ultimate goal is to checkmate the opponent at a later point in time. To achieve this, the agent may accept sacrifices, even if this results temporarily in an unfavorable immediate position \cite{huegle2022}. 
 
-The discount factor $\gamma$ helps guide the agent towards learning a behavior that balances the trade-off between immediate gratification and long-term strategic gains \cite{sutton2018}. This is crucial in helping the agent deal with problem-domains, where the optimal solutions involve a multi-step procedure \cite{brunton2022}. Consider the example of chess, where the ultimate goal is to checkmate the opponent at a later point in time. To achieve this, the agent may accept sacrifices, even if this results temporarily in an unfavorable immediate position \cite{huegle2022}. 
+Classically, the value function $V$ is computed iteratively and used to search for better policies via methods of dynamic programming, such as policy and value iteration \cite{sutton2018}. Classical dynamic programming is however of limited utility for two main reasons \cite{sutton2018,brunton2022}, namely $(i)$ the assumption of a perfect model, i.e. \emph{a priori} knowledge of the environmental transition dynamics $P(\nvec{s}, r \,|\, \nvec{s}, a)$ and $(ii)$ memory and computational constraints, for handling large and combinatorial state spaces. One approach in dealing with this issue is to apply a function approximator to model the value function based on gathered experiences \cite{sutton2018,mnih2015}.
 
-Classically, the value function $V$ is computed iteratively and used to search for better policies via methods of dynamic programming, such as policy and value iteration \cite{sutton2018}. Classical dynamic programming is however of limited utility for two main reasons \cite{sutton2018,brunton2022}, namely
-\begin{enumerate}
-    \item the assumption of a perfect model, i.e. \emph{a priori} knowledge of the environmental transition dynamics $P(\nvec{s}, r \,|\, \nvec{s}, a)$ and
-    \item memory and computational constraints, for handling large and combinatorial state spaces.
-\end{enumerate}
-In most modern applications, the environmental transition dynamics $P(\nvec{s}, r \,|\, \nvec{s}, a)$ is not known beforehand. Moreover, not only are the state spaces too enormous to be stored in tables, but they also require too much time and data to be filled accurately \cite{sutton2018,brunton2022}. One approach in dealing with this issue is to apply a function approximator to model the value function based on gathered experiences, such as a deep learning neural network \cite{sutton2018,mnih2015}.
-
-There exist various RL algorithms in the literature \cite{almahamid2021}, each suited for different environment types. The choice of RL algorithm depends namely on the $(i)$ number of states and $(ii)$ action types. For this work involving an environment that comprises an $(i)$ \emph{unlimited} number of states, $(ii)$ an agent that performs \emph{discrete} actions, and $(iii)$ no a priori knowledge of the environment dynamics, the Deep Q-Learning algorithm by \cite{mnih2015} is best suited. Moving forward, the equations in the next sections will only be formulated deterministically (i.e. $P(\nvec{s}, r \,|\, \nvec{s}, a)=1$).
+There exist various RL algorithms in the literature \cite{almahamid2021}, each suited for different environment types. The choice of RL algorithm depends namely on the $(i)$ number of states and $(ii)$ action types. For this work involving an environment that comprises an $(i)$ \emph{unlimited} number of states, $(ii)$ an agent that performs \emph{discrete} actions, and $(iii)$ no a priori knowledge of the environment dynamics, the Deep Q-Learning algorithm by \cite{mnih2015} is best suited. The equations in the next sections will be formulated deterministically (i.e. $P(\nvec{s}, r \,|\, \nvec{s}, a)=1$).

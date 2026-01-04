@@ -21,7 +21,7 @@ In short, the goal of RL is to maximize the sum of rewards in the long run \cite
   G_{t} = R_{t+1} + \gamma R_{t+2} + \gamma^{2} R_{t+3} + \cdots = \sum_{k=0}^{\infty} \gamma^{k} R_{t+1+k} \,,
   \label{eq:Return}
 \end{equation}
-where $\gamma$ denotes the \emph{discount rate} \cite{sutton2018,brunton2022}. To learn a policy that maximizes the return $G$, the ``desirability'' of being in a given state $\nvec{s}_t$ must be quantified. This is achieved via the \emph{value function} (\ref{eq:ValueFunction})
+where $\gamma$ denotes the \emph{discount rate} \cite{sutton2018,brunton2022}. In episodic environments, each episode ends in a special \emph{terminal state}, when the agent encounters a \emph{termination condition} $T_{\text{end}}$ \cite{almahamid2021}. This is followed by a reset to a standard or random starting state, and the agent begins with the next episode. To learn a policy that maximizes the return $G$, the ``desirability'' of being in a given state $\nvec{s}_t$ must be quantified. This is achieved via the \emph{value function} (\ref{eq:ValueFunction})
 \begin{equation}
     \begin{split}
       V_{\policy} (\nvec{s}) &= \mathbb{E}_{\policy} \left[ G_{t} \left. \, \right\rvert \, \nvec{s}_t = \nvec{s} \right] \\

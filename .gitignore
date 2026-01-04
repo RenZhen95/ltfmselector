@@ -22,4 +22,27 @@ examples/train.py
 RBRHX_ModalScores.xlsx
 
 # LaTeX
-*converted-to.pdf
+doc/figures/*converted-to.pdf
+doc/*.toc
+doc/*.dvi
+doc/*.log
+doc/*.aux
+doc/*.ps
+doc/*.pdf
+doc/*~
+doc/*.fls
+doc/*.fdb_latexmk
+doc/*.bbl
+doc/*.blg
+doc/*.glo
+doc/*.ist
+doc/*.acn
+doc/*.bcf*
+doc/*.bbl*
+doc/*.run*
+doc/*.acr
+doc/*.alg
+doc/*.glg
+doc/*.gls
+doc/*.out
+doc/*.glsdefs

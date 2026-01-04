@@ -1,0 +1,97 @@
+The agent was trained on the training dataset and evaluated on the test dataset at patient-level. The performance of the resulting predictions for the SMS subscores and their summed SMS on the test dataset in terms of the $R^2$ are as shown in Table \ref{tab:ltfmresults}. This performance is comparable to the agreement of each expert recommendation with the collective decisions of the expert-board (see Figure \ref{fig:LTFMvsBoard}). For each evaluation of the test data, the agent was able to optimally select a feature set and a PM for a given stride-pair, yielding excellent predictive performance and delivering patient-specific key features, which could help medical experts identify personalized key therapeutic targets.
+\begin{table}[H]
+  \centering
+  \begin{tabular}{p{0.175\textwidth}p{0.355\textwidth}p{0.075\textwidth}p{0.075\textwidth}p{0.075\textwidth}}
+    \hline
+    \textbf{SMS} & \textbf{Feature subset} & \textbf{$R^2$} & \textbf{ICC\textsubscript{1.1}} \\
+    \textbf{subscore} & $|\fsubset|$ & & $*$ & \\
+    \hline
+    Trunk-SMS     & 241 of 680 features & 0.59 & 0.65 \\
+    Leg-SMS       & 188 of 356 pre-selected features & 0.56 & 0.73 \\
+    Arm-SMS       & 99 of 330 pre-selected features & 0.54 & 0.72 \\
+    Speed-SMS     & 31 of 32 pre-selected features & 0.78 & 0.72 \\
+    Fluency-SMS   & 263 of 680 features & 0.73 & 0.72 \\
+    Stability-SMS & 238 of 680 features & 0.82 & 0.83 \\
+    \hline
+    \multicolumn{2}{p{0.6\textwidth}}{Combination of subscore models to predict the SMS} & 0.83 & 0.88 \\
+    \hline
+  \end{tabular}
+  \caption{Performance of RL agents on the test dataset in terms of $R^2$, and corresponding ICC\textsubscript{1.1} of the expert board assessments}
+  \label{tab:ltfmresults}
+\end{table}
+\begin{figure}
+\includegraphics[width=\textwidth]{LTFMvsBoard_JRMCC.pdf}
+\caption{Scatterplots showing how the individual experts (left) and RL agent (right) compare with the medical-board's gait assessment (abscissa) in terms of the SMS.} \label{fig:LTFMvsBoard}
+\end{figure}
+
+To obtain a general overview of the salient features, specific to the varying poststroke severity, the trained agent is used to predict the subscores of the training dataset, and the frequency of recruited features summed per SMS subscore. The intuititon here is that patients assigned the same SMS subscore exhibit similar underlying physical characteristics, represented by a subset of key features. Upon observing a patient, a well-trained agent will therefore recruit the features that make up the underlying pattern learned from patients of similar physical status from the training dataset. Consequently, the recruitment frequency of a feature can serve as an indication of the feature's representativeness with respect to a given SMS subscore group. Table \ref{tab:featuresRecruitmentFrequency} shows an example of the top seven features per SMS-Stability subscore, where the features ranked on top have the highest recruitment frequency within the group. The progression of the averaged $Q$-values per sampled batch at each training iteration is as plotted in Figure (??) for each SMS subscore.
+\begin{table}[H]
+  \centering
+  \begin{tabular}{c|p{0.2\textwidth}p{0.2\textwidth}p{0.2\textwidth}p{0.2\textwidth}}
+    \hline
+    \multirow{2}{*}{\textbf{Rank}} & \multicolumn{4}{c}{\textbf{SMS-Stability}} \\ \cline{2-5}
+       & \textbf{Score 0} & \textbf{Score 1} & \textbf{Score 2}  & \textbf{Score 3} \\ \hline
+    1  & Row 1, Col 2 & Row 1, Col 3 & Row 1, Col 4 & Test \\ 
+    2  & Row 2, Col 2 & Row 2, Col 3 & Row 2, Col 4 & Test \\ 
+    3  & Row 3, Col 2 & Row 3, Col 3 & Row 3, Col 4 & Test \\ 
+    4  & Row 4, Col 2 & Row 4, Col 3 & Row 4, Col 4 & Test \\ 
+    5  & Row 5, Col 2 & Row 5, Col 3 & Row 5, Col 4 & Test \\ 
+    6  & Row 6, Col 2 & Row 6, Col 3 & Row 6, Col 4 & Test \\ 
+    7  & Row 7, Col 2 & Row 7, Col 3 & Row 7, Col 4 & Test \\ \hline
+    \end{tabular}
+    \caption{Top features by recruitment count for predicting SMS-Stability}
+    \label{tab:featuresRecruitmentFrequency}
+\end{table}
+
+
+% %% Stride-Pair 1::
+% %% Stride-Pair 2::
+% Consider the following two stride-pairs, which will be referred to as SPI and SPII from the test dataset. SPI is a measured stride-pair of a critically affected patient (SMS of XX), and SPII, that of a mildly affected patient (SMS of XX). Both these handpicked examples have correctly predicted SMS, but not all predicted SMS subscores are necessarily correct. The true SMS subscores are displayed in brackets, next to the predicted subscores in Table \ref{tab:handpickedLTFMExamples} and as one can see, the selected key features vary depending on the physical status of a patient. The features listed in Table \ref{tab:handpickedLTFMExamples} are sorted in accordance to its relevance in terms of distinguishing samples of the selected stride-pair's assigned subscore from the remaining three subscores, quantified by the mutual information (cite??).
+
+% \begin{table}[H]
+%   \centering
+%   \begin{tabular}{@{}l@{\hspace{0.25em}}|p{0.4\textwidth}p{0.4\textwidth}}
+%     \hline
+%     \textbf{Sub-} & \textbf{<Example A>} & \textbf{<Example B>} \\
+%     \textbf{score} & $\quad$ \textbf{SMS: XX (critical)} & $\quad$ \textbf{SMS: XX (mild)} \\
+%     \hline
+%     \multirow{5}{*}{$\hspace{0.95em}$\makebox[0.75em]{\rotatebox{90}{\textbf{Trunk-SMS }}}}
+%     & \textbf{Predicted score: XX} (XX) & \textbf{Predicted score: XX} (XX) \\ \cline{2-3}
+%     & Feature A.2 & Feature B.2 \\
+%     & Feature A.3 & Feature B.3 \\
+%     & Feature A.4 & Feature B.4 \\
+%     & $\cdots$ (XX features in total) & $\cdots$ (XX features in total) \\ \hline
+%     \multirow{5}{*}{$\hspace{0.95em}$\makebox[0.75em]{\rotatebox{90}{\textbf{Leg-SMS }}}}
+%     & \textbf{Predicted score: XX} (XX) & \textbf{Predicted score: XX} (XX) \\ \cline{2-3}
+%     & Feature A.2 & Feature B.2 \\
+%     & Feature A.3 & Feature B.3 \\
+%     & Feature A.4 & Feature B.4 \\
+%     & $\cdots$ (XX features in total) & $\cdots$ (XX features in total) \\ \hline
+%     \multirow{5}{*}{$\hspace{0.95em}$\makebox[0.75em]{\rotatebox{90}{\textbf{Arm-SMS }}}}
+%     & \textbf{Predicted score: XX} (XX) & \textbf{Predicted score: XX} (XX) \\ \cline{2-3}
+%     & Feature A.2 & Feature B.2 \\
+%     & Feature A.3 & Feature B.3 \\
+%     & Feature A.4 & Feature B.4 \\
+%     & $\cdots$ (XX features in total) & $\cdots$ (XX features in total) \\ \hline
+%     \multirow{5}{*}{$\hspace{0.95em}$\makebox[0.75em]{\rotatebox{90}{\textbf{Speed-SMS }}}}
+%     & \textbf{Predicted score: XX} (XX) & \textbf{Predicted score: XX} (XX) \\ \cline{2-3}
+%     & Feature A.2 & Feature B.2 \\
+%     & Feature A.3 & Feature B.3 \\
+%     & Feature A.4 & Feature B.4 \\
+%     & $\cdots$ (XX features in total) & $\cdots$ (XX features in total) \\ \hline
+%     \multirow{5}{*}{$\hspace{0.95em}$\makebox[0.75em]{\rotatebox{90}{\textbf{Fluency-SMS }}}}
+%     & \textbf{Predicted score: XX} (XX) & \textbf{Predicted score: XX} (XX) \\ \cline{2-3}
+%     & Feature A.2 & Feature B.2 \\
+%     & Feature A.3 & Feature B.3 \\
+%     & Feature A.4 & Feature B.4 \\
+%     & $\cdots$ (XX features in total) (XX) & $\cdots$ (XX features in total) (XX) \\ \hline
+%     \multirow{5}{*}{$\hspace{0.95em}$\makebox[0.75em]{\rotatebox{90}{\textbf{Stability-SMS }}}}
+%     & \textbf{Predicted score: XX} & \textbf{Predicted score: XX} \\ \cline{2-3}
+%     & Feature A.2 & Feature B.2 \\
+%     & Feature A.3 & Feature B.3 \\
+%     & Feature A.4 & Feature B.4 \\
+%     & $\cdots$ (XX features in total) & $\cdots$ (XX features in total) \\ \hline
+%   \end{tabular}
+%   \caption{Two examples from the test dataset, each with their respective subset of features recruited by the agent to predict each SMS subscores}
+%   \label{tab:handpickedLTFMExamples}
+% \end{table}

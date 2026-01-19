@@ -1,4 +1,4 @@
-The agent was trained on the training dataset and evaluated on the test dataset at patient-level. The performance of the resulting predictions for the SMS subscores and their summed SMS on the test dataset in terms of the $R^2$ are as shown in Table \ref{tab:ltfmresults}. This performance is comparable to the agreement of each expert recommendation with the collective decisions of the expert-board (see Figure \ref{fig:LTFMvsBoard}). For each evaluation of the test data, the agent was able to optimally select a feature set and a PM for a given stride-pair, yielding excellent predictive performance and delivering patient-specific key features, which could help medical experts identify personalized key therapeutic targets.
+The agent was trained on the training dataset and evaluated on the test dataset at patient-level. The performance of the resulting predictions for the SMS subscores and their summed SMS on the test dataset in terms of the $R^2$ are as shown in Table \ref{tab:ltfmresults}. This performance is comparable to the agreement of each expert recommendation with the collective decisions of the medical-board (see Figure \ref{fig:LTFMvsBoard}). For each evaluation of the test data, the agent was able to optimally select a feature set and a PM for a given stride-pair, yielding excellent predictive performance and delivering patient-specific key features, which could help medical experts identify personalized key therapeutic targets.
 \begin{table}[H]
   \caption{Performance of RL agents on the test dataset in terms of $R^2$, and corresponding ICC\textsubscript{1.1} of the medical-board assessments.}
   \label{tab:ltfmresults}
@@ -18,15 +18,13 @@ The agent was trained on the training dataset and evaluated on the test dataset 
     \hline
   \end{tabular}
 \end{table}
-
-\begin{figure}
+\begin{figure}[!h]
 \includegraphics[width=\textwidth]{DoctorsvsBoard_TestSplit_and_LTFMJRMCC.pdf}
 \caption{Scatterplots showing how the individual experts (left) and RL agent (right) compare with the medical-board's gait assessment (abscissa) in terms of the SMS.} \label{fig:LTFMvsBoard}
 \end{figure}
-
-To obtain a general overview of the salient features, specific to the varying poststroke severity, the trained agent is used to predict the subscores of the training dataset, and the frequency of recruited features summed per SMS subscore. The intuititon here is that patients assigned the same SMS subscore exhibit similar underlying physical characteristics, represented by a subset of key features. Upon observing a patient, a well-trained agent will therefore recruit the features that make up the underlying pattern learned from patients of similar physical status from the training dataset. Consequently, the recruitment frequency of a feature can serve as an indication of the feature's representativeness with respect to a given SMS subscore group. Taking Fluency-SMS as an example, the top seven features and progression of the averaged $Q$-values per sampled batch during training are as shown in Table \ref{tab:featuresRecruitmentFrequency} and Figure \ref{fig:QValuesProgression}, respectively.
+To obtain a general overview of the salient features for the varying degrees of gait impairment, inference is performed on the training dataset, and the frequency of recruited features summed per SMS subscore. The intuititon here is that patients assigned the same SMS subscore should exhibit similar underlying physical characteristics, represented by a subset of key features. Upon observing a patient, a well-trained agent then recruits the features that make up the underlying pattern learned from patients of similar physical status. Consequently, the recruitment frequency of a feature can serve as an indication of the feature's representativeness with respect to a given SMS subscore group. Taking Fluency-SMS as an example, the top seven features and progression of the averaged $Q$-values per sampled batch during training are as shown in Table \ref{tab:featuresRecruitmentFrequency} and Figure \ref{fig:QValuesProgression}, respectively.
 \begin{table}[H]
-  \caption{Top features by recruitment count for predicting SMS-Fluency}
+  \caption{Top features by recruitment count for predicting SMS-Fluency. NAV denotes the normalized angular velocity, as described in \cite{liaw2025}.}
   \label{tab:featuresRecruitmentFrequency}
   \begin{tabular}{|p{0.075\textwidth}|p{0.23\textwidth}|p{0.23\textwidth}|p{0.23\textwidth}|p{0.23\textwidth}|}
     \hline
@@ -55,9 +53,8 @@ To obtain a general overview of the salient features, specific to the varying po
        & (Stance max.) & (Stride max.)      & (Stride max.)  & (Stride max.)  \\ \hline
     \end{tabular}
 \end{table}
-
-\begin{figure}
-\includegraphics[width=\textwidth]{DoctorsvsBoard_TestSplit_and_LTFMJRMCC.pdf}
+\begin{figure}[!h]
+\includegraphics[width=0.75\textwidth]{QValuesFluency_and_Pendulum.pdf}
 \caption{Averaged $Q$-Values per sampled batch at each training iteration for the example of balancing an inversed pendulum (top) and predicting the Fluency-SMS (bottom).} \label{fig:QValuesProgression}
 \end{figure}
 

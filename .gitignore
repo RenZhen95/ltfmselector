@@ -1,4 +1,5 @@
 # Python-generated files
+dqntutorial/video*
 __pycache__/
 *.py[oc]
 build/

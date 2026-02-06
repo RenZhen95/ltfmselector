@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from collections import defaultdict
 
+from .logger import Logger
 from .env import Environment
 from .utils import ReplayMemory, DQN, Transition
 
@@ -110,25 +111,25 @@ class LTFMSelector:
             Cost of querying a feature.
 
         fQueryFunction : None or {'step', 'linear', 'quadratic'}
-            User can also decide to progressively increase the cost of 
+            User can also decide to progressively increase the cost of
             querying features in the following manner:
-            'step' : 
-                Every additional feature adds a fixed constant, determined 
+            'step' :
+                Every additional feature adds a fixed constant, determined
                 by user.
-            'linear' : 
-                Cost of every additional feature linearly increases according    
+            'linear' :
+                Cost of every additional feature linearly increases according
                 to user-defined gradient
-            'quadratic' : 
-                Cost of every additional feature increases quadratically, 
+            'quadratic' :
+                Cost of every additional feature increases quadratically,
                 according to a user-defined rate
 
         fThreshold : None or int
             If `fQueryFunction == {'step', 'linear', 'quadratic', 'exponential'}`
-            Threshold of number of features, before cost of recruiting 
+            Threshold of number of features, before cost of recruiting
             increases
-            
+
         fCap : None or float
-            If `fQueryFunction == {'step', 'linear', 'quadratic'}`, upper 
+            If `fQueryFunction == {'step', 'linear', 'quadratic'}`, upper
             limit of penalty
 
         fRate : None or float
@@ -284,7 +285,7 @@ class LTFMSelector:
     def fit(
             self, X, y, loss_function='mse', sample_weight=None,
             agent_neuralnetwork=None, lr=1e-5, returnQ=False,
-            monitor=False, background_dataset=None, **kwargs
+            monitor=False, log=False, background_dataset=None, **kwargs
     ):
         '''
         Initializes the environment and agent, then trains the agent to select
@@ -323,14 +324,17 @@ class LTFMSelector:
 
         returnQ : bool
             Return average computed action-value functions and rewards of
-            the sampled batches, as a (<total_iterations>, 3) matrix. The 
+            the sampled batches, as a (<total_iterations>, 3) matrix. The
             columns correspond to the averaged Q, reward, and target functions.
 
         monitor : bool
             Monitor training process using a TensorBoard.
 
-            Run `tensorboard --logdir=runs` in the terminal to monitor the p
+            Run `tensorboard --logdir=runs` in the terminal to monitor the
             progression of the action-value function.
+
+        log : bool
+            Log states and actions for research purposes
 
         background_dataset : None or pd.DataFrame
             If None, numerical features will be assumed when computing the
@@ -403,6 +407,9 @@ class LTFMSelector:
         )
         env.reset()
 
+        if log:
+            logger = Logger(env, max_steps=self.max_timesteps)
+
         # Initializing length of state and actions as public fields for
         # loading the model later
         self.state_length = len(env.state)
@@ -464,6 +471,9 @@ class LTFMSelector:
                 # - observation (state in next time-step)
                 # - reward
                 observation, reward, terminated = env.step(action.item())
+
+                if log:
+                    logger.log_step(observation, action)
 
                 if terminated:
                     next_state = None
@@ -529,6 +539,9 @@ class LTFMSelector:
                     )
                     break
 
+            if log:
+                logger.log_episode()
+
             # Saving trained policy network intermediately
             if not self.checkpoint_interval is None:
                 if (i_episode + 1) % self.checkpoint_interval == 0:
@@ -538,6 +551,9 @@ class LTFMSelector:
             if not self.episodes in self.policy_network_checkpoints:
                 self.policy_network_checkpoints[self.episodes] =\
                     self.policy_net.state_dict()
+
+        if log:
+            logger.save_data("ActionStates_fromFit.npz")
 
         if monitor:
             writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
@@ -556,7 +572,7 @@ class LTFMSelector:
         else:
             return doc
 
-    def predict(self, X_test, **kwargs):
+    def predict(self, X_test, log=False, **kwargs):
         '''
         Use trained agent to select features and a suitable prediction model
         to predict the target/class, given X_test.
@@ -565,6 +581,9 @@ class LTFMSelector:
         ----------
         X_test : pd.DataFrame
             Test samples
+
+        log : bool
+            Log states and actions for research purposes
 
         Returns
         -------
@@ -584,6 +603,8 @@ class LTFMSelector:
             self.pType, self.regression_tol, self.regression_error_rounding,
             self.pModels, self.device, **kwargs
         )
+        if log:
+            logger = Logger(env, max_steps=self.max_timesteps)
 
         # Create dictionary to save information per episode
         doc_test = defaultdict(dict)
@@ -607,6 +628,9 @@ class LTFMSelector:
                     action = torch.tensor([[-1]], device=self.device)
 
                 observation, reward, terminated = env.step(action.item())
+
+                if log:
+                    logger.log_step(observation, action)
 
                 if terminated:
                     next_state = None
@@ -636,6 +660,12 @@ class LTFMSelector:
                     )
                     y_pred[i] = env.y_pred
                     break
+
+            if log:
+                logger.log_episode()
+
+        if log:
+            logger.save_data("ActionStates_fromPredict.npz")
 
         return y_pred, doc_test
 

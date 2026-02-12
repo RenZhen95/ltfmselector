@@ -178,6 +178,10 @@ class LTFMSelector:
             2. Random Forest
             3. Ridge Regression
 
+            If it is intended for the agent to only dynamically select features
+            and use only the prescribed prediction model, simply enter a list
+            with one instance of a prediction model.
+
         gamma : float
             Discount factor, must be in :math:`]0, 1]`. The higher the discount
             factor, the higher the influence of rewards from future states.

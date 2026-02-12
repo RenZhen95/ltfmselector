@@ -129,7 +129,11 @@ class Environment:
         self.nFeatures = self.X.shape[1]
 
         # Agent's actions
-        self.actions = np.arange(-1, self.nFeatures + len(self.pModels))
+        #  - Include option of selecting prediction
+        if len(self.pModels) > 1:
+            self.actions = np.arange(-1, self.nFeatures + len(self.pModels))
+        else:
+            self.actions = np.arange(-1, self.nFeatures)
 
         # Counter for prediction model change
         self.pm_nChange = 0
@@ -158,7 +162,10 @@ class Environment:
             i = random.randint(0, self.nSamples - 1)
 
         # Reset actions list
-        self.actions = np.arange(-1, self.nFeatures + len(self.pModels))
+        if len(self.pModels) > 1:
+            self.actions = np.arange(-1, self.nFeatures + len(self.pModels))
+        else:
+            self.actions = np.arange(-1, self.nFeatures)
 
         # Reset regressor result
         self.y_pred = None
@@ -190,13 +197,21 @@ class Environment:
             self.y_train = self.y
 
         # Formulating the state (partially observable MDP)
-        self.state = np.concatenate(
-            (
-                self.X_avg.to_numpy().reshape(-1),
-                np.zeros(self.nFeatures),
-                [random.randint(0, len(self.pModels)-1)]
+        if len(self.pModels) > 1:
+            self.state = np.concatenate(
+                (
+                    self.X_avg.to_numpy().reshape(-1),
+                    np.zeros(self.nFeatures),
+                    [random.randint(0, len(self.pModels)-1)]
+                )
             )
-        )
+        else:
+            self.state = np.concatenate(
+                (
+                    self.X_avg.to_numpy().reshape(-1),
+                    np.zeros(self.nFeatures)
+                )
+            )
 
         # Counter for prediction model change
         self.pm_nChange = 0
@@ -285,7 +300,10 @@ class Environment:
             X_test  = X_test[col_to_retain]
 
             # Get selected prediction model
-            selected_predModel = self.pModels[int(self.state[-1])]
+            if len(self.pModels) > 1:
+                selected_predModel = self.pModels[int(self.state[-1])]
+            else:
+                selected_predModel = self.pModels[0]
 
             ### Special-tailored implementation ###
             if self.smsproject:

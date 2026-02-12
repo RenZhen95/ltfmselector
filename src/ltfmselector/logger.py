@@ -1,8 +1,10 @@
 import numpy as np
 
+pmSelection = lambda x: 1 if len(x) > 1 else 0
+
 class Logger:
     def __init__(self, env, max_steps=500):
-        self.state_dim = env.X.shape[1]*2 + 1
+        self.state_dim = env.X.shape[1]*2 + pmSelection(env.pModels)
         self.max_steps = max_steps
         
         # Pre-allocate the "scratchpad" for the current episode

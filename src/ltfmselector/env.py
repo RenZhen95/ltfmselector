@@ -234,7 +234,6 @@ class Environment:
         if ((action > -1) & (action < self.nFeatures)):
             # If feature has NOT been selected, select that feature
             if self.state[self.nFeatures + action] == 0:
-
                 # 1. Set mask value to 1
                 self.state[self.nFeatures + action] = 1
 
@@ -437,7 +436,10 @@ class Environment:
         '''
         Get the selected prediction model and returns its index
         '''
-        return int(self.state[-1])
+        if len(self.pModels) > 1:
+            return int(self.state[-1])
+        else:
+            return 0
 
     def get_bgPrediction(self):
         '''

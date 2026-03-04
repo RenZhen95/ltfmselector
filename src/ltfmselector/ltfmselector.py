@@ -804,6 +804,11 @@ class LTFMSelector:
             reward_batch + (next_state_values * self.gamma)
         ).float()
 
+        # Clip target values at a maximum of zero, since we only have penalties!
+        expected_state_action_values = torch.clamp(
+            expected_state_action_values, max=0.0
+        )
+
         # Step ---
         # 7. Compute loss
         if isinstance(loss_function, str):

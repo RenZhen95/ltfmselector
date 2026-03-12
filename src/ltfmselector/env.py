@@ -14,7 +14,7 @@ capLowerValues = lambda x: 0.0 if x < 0.0 else x
 
 class Environment:
     def __init__(
-            self, X, y, X_bg,
+            self, X, y, X_bg, y_pred_bg,
             fQueryCost, fQueryFunction,
             fThreshold, fCap, fRate,
             mQueryCost,
@@ -36,11 +36,14 @@ class Environment:
             Class/Target vector
 
         X_bg : pd.DataFrame
-            Background dataaset, pandas dataframe with the shape:
+            Background dataset, pandas dataframe with the shape:
             (n_samples+1, n_features)
 
             An extra row for 'Total', average feature values for all training
             samples
+
+        y_pred_bg : ``list of int or float``
+           Predictions from provided models on X_bg 
 
         fQueryCost : float
             Cost of querying a feature
@@ -102,6 +105,7 @@ class Environment:
         self.X = X
         self.y = y
         self.X_bg = X_bg
+        self.y_pred_bg = y_pred_bg
 
         # Reward functions
         self.fQueryCost = fQueryCost
@@ -143,8 +147,6 @@ class Environment:
             self.smsproject = True
         else:
             self.smsproject = False
-
-        self.y_pred_bg = self.get_bgPrediction()
 
         self.state = None
 
@@ -348,28 +350,22 @@ class Environment:
                             abs(self.y_pred - self.y_test),
                             self.regression_error_rounding
                     ) < self.regression_tol:
-                        print("\nCorrect prediction")
                         penalty = 0
                     else:
-                        print("\nIncorrect prediction")
                         penalty = -self.errorCost * abs(self.y_pred - self.y_test)
 
                 elif self.pType == "classification":
                     if self.y_pred == self.y_test:
-                        print("\nCorrect prediction")
                         penalty = 0
                     else:
-                        print("\nIncorrect prediction")
                         penalty = -self.errorCost
 
-                print(f"True Output: {self.y_test} | Prediction: {self.y_pred}\n")
-
+                # print(f"True Output: {self.y_test} | Prediction: {self.y_pred}\n")
                 return [None, penalty, True]
 
             # Test
             else:
-                print(f"Prediction: {self.y_pred}\n")
-
+                # print(f"Prediction: {self.y_pred}\n")
                 return [None, 0.0, True]
 
     def get_fQueryCost(self):
@@ -438,54 +434,6 @@ class Environment:
         Get the selected prediction model and returns its index
         '''
         return int(self.state[-1])
-
-    def get_bgPrediction(self):
-        '''
-        Get prediction based on background dataset for each type of
-        prediction model, fitted with the training samples, to be used
-        for the case that the agent decides to make a prediction without
-        any recruited features.
-        '''
-        # Initialize map between model type with background prediction
-        yBg_Model = []
-
-        ### Special-tailored implementation ###
-        if self.smsproject:
-            X_train_wLabel = self.X.copy()
-            X_train_wLabel["Target"] = self.y.loc[X_train_wLabel.index]
-
-            _weights = balance_classDistribution_patient(
-                X_train_wLabel, "Target"
-            ).to_numpy(dtype=np.float32)[:,0]
-        else:
-            _weights = self.sample_weight
-
-        # DataFrame or Series -> convert to numpy arrays
-        if isinstance(self.X, pd.DataFrame):
-            _X = self.X.values
-
-        if isinstance(self.y, pd.Series):
-            _y = self.y.values
-
-        for m in self.pModels:
-            # Fit each prediction model with the entire dataset
-            if _weights is None:
-                m.fit(_X, _y)
-            else:
-                m.fit(_X, _y, sample_weight=_weights)
-
-            # Use fitted model to make a prediction based on background
-            # dataset
-            yBg_Model.append(
-                m.predict(self.X_bg.loc[["Total"]])[0]
-            )
-
-            # Capping values between 0 and 3
-            if self.smsproject:
-                yBg_Model[-1] = capUpperValues(yBg_Model[-1])
-                yBg_Model[-1] = capLowerValues(yBg_Model[-1])
-
-        return yBg_Model
 
     def __getstate__(self):
         state = self.__dict__.copy()

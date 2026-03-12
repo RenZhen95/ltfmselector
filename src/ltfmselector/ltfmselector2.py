@@ -1,4 +1,4 @@
-import torch
+mport torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
@@ -11,7 +11,9 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
+from joblib import Parallel, delayed
 
+from .logger import Logger
 from .env import Environment
 from .utils import ReplayMemory, DQN, Transition, balance_classDistribution_patient
 
@@ -69,7 +71,7 @@ def load_model(filename, default_policy_net=True):
 
     return selector, pModels
 
-class LTFMSelector:
+class LTFMSelectorVectorized:
     def __init__(
             self, episodes, batch_size=256, tau=0.0005,
             eps_start=0.9, eps_end=0.05, eps_decay=1000,
@@ -396,22 +398,23 @@ class LTFMSelector:
             self.X, self.y, self.background_dataset, self.sample_weight, **kwargs
         )
 
-        # Initializing the environment
-        env = Environment(
-            self.X, self.y, self.background_dataset, self.y_pred_bg,
-            self.fQueryCost, self.fQueryFunction,
-            self.fThreshold, self.fCap, self.fRate,
-            self.mQueryCost,
-            self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
-            self.pType, self.regression_tol, self.regression_error_rounding,
-            self.pModels, self.device, sample_weight=self.sample_weight,
-            **kwargs
-        )
+        # Initializing the environments in parallel
+        envs = [
+            Environment(
+                self.X, self.y, self.background_dataset, self.y_pred_bg,
+                self.fQueryCost, self.fQueryFunction,
+                self.fThreshold, self.fCap, self.fRate,
+                self.mQueryCost,
+                self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
+                self.pType, self.regression_tol, self.regression_error_rounding,
+                self.pModels, self.device, sample_weight=self.sample_weight, **kwargs
+            ) for i in tqdm(range(self.episodes), desc=f"Creating {self.episodes} environments")
+        ]
 
         # Initializing length of state and actions as public fields for
         # loading the model later
-        self.state_length = len(env.state)
-        self.actions_length = len(env.actions)
+        self.state_length = len(envs[0].state)
+        self.actions_length = len(envs[0].actions)
 
         # Initializing the policy and target networks
         if isinstance(agent_neuralnetwork, nn.Module):
@@ -428,11 +431,11 @@ class LTFMSelector:
                 nLayer2 = agent_neuralnetwork[1]
 
             self.policy_net = DQN(
-                len(env.state), len(env.actions), nLayer1, nLayer2
+                len(envs[0].state), len(envs[0].actions), nLayer1, nLayer2
             ).to(self.device)
 
             self.target_net = DQN(
-                len(env.state), len(env.actions), nLayer1, nLayer2
+                len(envs[0].state), len(envs[0].actions), nLayer1, nLayer2
             ).to(self.device)
 
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -444,78 +447,103 @@ class LTFMSelector:
 
         # Training the agent over self.episodes
         if self.max_timesteps is None:
-            self.max_timesteps = env.nFeatures * 3
+            self.max_timesteps = envs[0].nFeatures * 3
 
-        for i_episode in tqdm(range(self.episodes)):
-            state = env.reset()
+        # Reset all environments
+        states = np.array(Parallel(n_jobs=-1, prefer="threads")(
+            delayed(env.reset)() for env in envs
+        ))
+        states = torch.tensor(states, dtype=torch.float32, device=self.device)
+        # >> Tensor(nEpisodes, |State|)
 
-            # Convert state to pytorch tensor
-            state = torch.tensor(
-                state, dtype=torch.float32, device=self.device
+        for t in count():
+            # Make agent take an action
+            actions = self.select_action(states, envs)
+            # >> Tensor(nEpisodes, 1) - Action selected for each environment
+
+            # Log actions if desired
+            if log_actions:
+                self.ActionsLog[:,t] = actions.numpy()
+
+            # If maximum time_steps is reached
+            if t+1 == self.max_timesteps:
+                actions = torch.tensor(
+                    [-1 for e in range(len(envs))], device=self.device
+                ).view(len(envs), 1)
+
+            # Agent carries out action in each environment and returns:
+            # - Observations :: list(nEpisodes)
+            # >> Every element is the next state or None (termination
+            # - Rewards      :: list(nEpisodes)
+            # - Terminations :: list(nEpisodes of boolean value)
+            envTransition = []
+            for envIdx, env in enumerate(tqdm(envs)):
+                envTransition.append(env.step(actions[envIdx, 0].item()))
+
+            observations, rewards, terminations = zip(*envTransition)
+            observations = list(observations)
+            rewards = torch.tensor(
+                list(rewards), device=self.device
+            ).view(len(envs), 1)
+            terminations = list(terminations)
+
+            get_nextState = lambda x, o: None if x else torch.tensor(
+                o, dtype=torch.float32, device=self.device
             ).unsqueeze(0)
 
-            for t in count():
-                # Make agent take an action
-                action = self.select_action(state, env)
+            nextStates = Parallel(n_jobs=-1, prefer="threads")(
+                delayed(get_nextState)(t, o) for t, o in zip(terminations, observations)
+            )
 
-                # Log actions if desired
-                if log_actions:
-                    self.ActionsLog[i_episode,t] = int(
-                        action.squeeze(1).numpy()[0]
-                    )
-
-                if t+1 == self.max_timesteps:
-                    action = torch.tensor([[-1]], device=self.device)
-
-                # Agent carries out action on the environment and returns:
-                # - observation (state in next time-step)
-                # - reward
-                observation, reward, terminated = env.step(action.item())
-
-                if terminated:
-                    next_state = None
-                else:
-                    next_state = torch.tensor(
-                        observation, dtype=torch.float32, device=self.device
-                    ).unsqueeze(0)
-
-                self.ReplayMemory.push(
-                    state, action, next_state,
-                    torch.tensor([reward], device=self.device)
+            # Push to replay buffer
+            Parallel(n_jobs=-1, prefer="threads")(
+                delayed(self.ReplayMemory.push)(
+                    s.unsqueeze(0), a.unsqueeze(0), sp, r
+                ) for s, a, sp, r in zip(
+                    torch.unbind(states, dim=0), torch.unbind(actions, dim=0),
+                    nextStates, rewards
                 )
+            )
 
-                # Move on to next state
-                state = next_state
-                
-                # Optimize the model
-                _res = self.optimize_model(optimizer, loss_function, monitor, returnQ)
+            # Update next state
+            # - Kick out environments that have ended from `envs` and `states`
+            nextStates_onGoing = []
+            envIdxToRemove     = []
+            for i, sp in enumerate(nextStates):
+                if not sp is None:
+                    nextStates_onGoing.append(sp)
+                else:
+                    envIdxToRemove.append(i)
 
-                if monitor:
-                    if not _res is None:
-                        writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
-                        writer.add_scalar("Metrics/Average_Reward", _res[1], monitor_count)
-                        writer.add_scalar("Metrics/Average_Target", _res[2], monitor_count)
-                        monitor_count += 1
+            for i in reversed(envIdxToRemove):
+                del envs[i]
 
-                # Apply soft update to target network's weights
-                targetParameters = self.target_net.state_dict()
-                policyParameters = self.policy_net.state_dict()
+            # All environments have terminated
+            if len(nextStates_onGoing) == 0:
+                break
 
-                for key in policyParameters:
-                    targetParameters[key] = policyParameters[key]*self.tau + \
-                        targetParameters[key]*(1 - self.tau)
+            states = torch.tensor(
+                np.array(nextStates_onGoing), dtype=torch.float32, device=self.device
+            ).squeeze(1)
 
-                self.target_net.load_state_dict(targetParameters)
+            # Optimize the model
+            _res = self.optimize_model(optimizer, loss_function, monitor)
 
-            # Saving trained policy network intermediately
-            if not self.checkpoint_interval is None:
-                if (i_episode + 1) % self.checkpoint_interval == 0:
-                    self.policy_network_checkpoints[i_episode + 1] =\
-                        self.policy_net.state_dict()
+            if monitor:
+                writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
+                writer.add_scalar("Metrics/Average_Reward", _res[1], monitor_count)
+                writer.add_scalar("Metrics/Average_Target", _res[2], monitor_count)
+                monitor_count += 1
 
-            if not self.episodes in self.policy_network_checkpoints:
-                self.policy_network_checkpoints[self.episodes] =\
-                    self.policy_net.state_dict()
+            # Apply soft update to target network's weights
+            targetParameters = self.target_net.state_dict()
+            policyParameters = self.policy_net.state_dict()
+
+            for key in policyParameters:
+                targetParameters[key] = policyParameters[key]*self.tau + \
+                    targetParameters[key]*(1 - self.tau)
+
+            self.target_net.load_state_dict(targetParameters)
 
         if monitor:
             writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
@@ -542,17 +570,26 @@ class LTFMSelector:
         y_pred : pd.Series
             Target/Class predicted for X_test
         '''
-        # Initializing the environment
-        env = Environment(
-            self.X, self.y, self.background_dataset, self.y_pred_bg,
-            self.fQueryCost, self.fQueryFunction,
-            self.fThreshold, self.fCap, self.fRate,
-            self.mQueryCost,
-            self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
-            self.pType, self.regression_tol, self.regression_error_rounding,
-            self.pModels, self.device, sample_weight=self.sample_weight,
-            **kwargs
-        )
+        # Initializing the environments in parallel for each test sample
+        envs = [
+            Environment(
+                self.X, self.y, self.background_dataset, self.y_pred_bg,
+                self.fQueryCost, self.fQueryFunction,
+                self.fThreshold, self.fCap, self.fRate,
+                self.mQueryCost,
+                self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
+                self.pType, self.regression_tol, self.regression_error_rounding,
+                self.pModels, self.device, sample_weight=self.sample_weight,
+                **kwargs
+            ) for i in tqdm(
+                range(X_test.shape[0]),
+                desc=f"Creating {X_test.shape[0]} environments for each test sample"
+            )
+        ]
+        if isinstance(X_test, pd.DataFrame):
+            IDX = list(X_test.index)
+        else:
+            raise ValueError("X_test must be a pandas DataFrame!")
 
         # Create dictionary to save information per episode
         self.doc_test = defaultdict(dict)
@@ -560,55 +597,86 @@ class LTFMSelector:
         # Array to store predictions
         y_pred = pd.Series(np.zeros(X_test.shape[0]), index=X_test.index)
 
-        for i, test_sample in enumerate(tqdm(X_test.index)):
-            state = env.reset(sample=X_test.loc[[test_sample]])
+        # Reset all environments
+        states = np.array(Parallel(n_jobs=-1, prefer="threads")(
+            delayed(env.reset)(
+                sample=X_test.iloc[[i]]
+            ) for i, env in enumerate(envs)
+        ))
+        states = torch.tensor(states, dtype=torch.float32, device=self.device)
 
-            # Convert state to pytorch tensor
-            state = torch.tensor(
-                state, dtype=torch.float32, device=self.device
+        for t in count():
+            actions = self.select_action(states, envs)
+
+            if t+1 == self.max_timesteps:
+                actions = torch.tensor(
+                    [-1 for e in range(len(envs))], device=self.device
+                ).view(len(envs), 1)
+
+            envTransition = []
+            for envIdx, env in enumerate(tqdm(envs)):
+                envTransition.append(env.step(actions[envIdx, 0].item()))
+
+            observations, rewards, terminations = zip(*envTransition)
+            observations = list(observations)
+            rewards = torch.tensor(
+                list(rewards), device=self.device
+            ).view(len(envs), 1)
+            terminations = list(terminations)
+
+            get_nextState = lambda x, o: None if x else torch.tensor(
+                o, dtype=torch.float32, device=self.device
             ).unsqueeze(0)
 
-            for t in count():
-                action = self.select_action(state, env)
+            nextStates = Parallel(n_jobs=-1, prefer="threads")(
+                delayed(get_nextState)(t, o) for t, o in zip(terminations, observations)
+            )
 
-                if t+1 == self.max_timesteps:
-                    action = torch.tensor([[-1]], device=self.device)
-
-                observation, reward, terminated = env.step(action.item())
-
-                if terminated:
-                    next_state = None
-                    doc_episode = {
-                        "SampleID": test_sample,
-                        "PredModel": env.get_prediction_model(),
-                        "Iterations": t+1,
-                        "Mask": env.get_feature_mask(),
-                        "predModel_nChanges": env.pm_nChange
-                    }
-                    self.doc_test[test_sample] = doc_episode
-                    y_pred.at[test_sample] = env.y_pred
-
-                    break
+            # Update next state
+            # - Kick out environments that have ended from `envs` and `states`
+            nextStates_onGoing = []
+            envIdxToRemove     = []
+            for i, sp in enumerate(nextStates):
+                if not sp is None:
+                    nextStates_onGoing.append(sp)
                 else:
-                    next_state = torch.tensor(
-                        observation, dtype=torch.float32, device=self.device
-                    ).unsqueeze(0)
+                    envIdxToRemove.append(i)
 
-                    state = next_state
+                    doc_episode = {
+                        "SampleID": IDX[i],
+                        "PredModel": envs[i].get_prediction_model(),
+                        "Iterations": t+1,
+                        "Mask": envs[i].get_feature_mask(),
+                        "predModel_nChanges": envs[i].pm_nChange
+                    }
+                    self.doc_test[IDX[i]] = doc_episode
+                    y_pred.at[IDX[i]] = envs[i].y_pred
+
+            for i in reversed(envIdxToRemove):
+                del envs[i]
+                del IDX[i]
+
+            # All environments have terminated
+            if len(nextStates_onGoing) == 0:
+                break
+
+            states = torch.tensor(
+                np.array(nextStates_onGoing), dtype=torch.float32, device=self.device
+            ).squeeze(1)
 
         return y_pred
 
-    def select_action(self, state, env):
+    def select_action(self, states, envs):
         '''
-        Select an action based on the given state. For exploration an
+        Select an action based on the given states. For exploration an
         epsilon-greedy strategy is implemented - the agent will for an
         epsilon probability choose a random action, instead of using the
         policy network.
 
         Parameters
         ----------
-        state : np.array
-            State of environment
+        states : torch.Tensor
+            State of environments generated in parallel
         '''
         # Probability of choosing random actions, instead of best action
         # - Probability decreases exponentially over time
@@ -617,15 +685,21 @@ class LTFMSelector:
 
         self.total_actions += 1
 
+        # Perform random action
         if eps_threshold > random.random():
             return torch.tensor(
-                [[env.get_random_action()]], device=self.device, dtype=torch.long
-            )
+                [env.get_random_action() for env in envs], device=self.device, dtype=torch.long
+            ).view(states.shape[0], 1)
+
+        # Perform maximizing action
         else:
             with torch.no_grad():
-                return (self.policy_net(state).max(1)[1].view(1, 1) - 1)
+                QValues = self.policy_net(states)
+                # >> Tensor(nEpisodes, |Actions (Predict + #Features + #PM)|)
 
-    def optimize_model(self, optimizer, loss_function, monitor, returnQ):
+                return (QValues.max(1)[1].view(states.shape[0], 1) - 1)
+
+    def optimize_model(self, optimizer, loss_function, monitor):
         '''
         Optimize the policy network.
 
@@ -634,10 +708,6 @@ class LTFMSelector:
         loss_function : {'mse', 'smoothl1'} or custom function
             Choice of loss function. Default is 'mse'. User may also pass
             own customized loss function, based on PyTorch.
-
-        returnQ : bool
-            Return average computed action-value functions and rewards of
-            the sampled batches, for debugging purposes.
         '''
         # Regarding notations used in comments:
         # s  : current state
@@ -680,6 +750,7 @@ class LTFMSelector:
                 map(lambda s: s is not None, batch.next_state)
             ), device=self.device, dtype=torch.bool
         )
+
         # Example of map()
         # >> A = [6, 53, 3, 9, 12]
         # >> B = tuple(map(lambda s: s < 10, A))
@@ -756,7 +827,7 @@ class LTFMSelector:
         # Optimize the model (policy network)
         optimizer.step()
 
-        if (monitor or returnQ):
+        if monitor:
             Q_avr = state_action_values.detach().numpy().mean()
             r_avr = reward_batch.unsqueeze(1).numpy().mean()
             V_avr = expected_state_action_values.unsqueeze(1).numpy().mean()
@@ -847,6 +918,8 @@ class LTFMSelector:
 
         if isinstance(y, pd.Series):
             _y = y.values
+        else:
+            _y = y
 
         for m in self.pModels:
             # Fit each prediction model with the entire dataset

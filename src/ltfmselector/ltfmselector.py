@@ -22,6 +22,10 @@ from sklearn.linear_model import Ridge
 from sklearn.naive_bayes import GaussianNB
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 
+# Functions to clip predicted regression values
+capUpperValues = lambda x: 3.0 if x > 3.0 else x
+capLowerValues = lambda x: 0.0 if x < 0.0 else x
+
 def load_model(filename, default_policy_net=True):
     '''
     Load a previously saved model. The list of prediction models will be
@@ -58,6 +62,7 @@ def load_model(filename, default_policy_net=True):
             policy_network_dict["n1"],
             policy_network_dict["n2"]
         )
+        print(policy_network_dict.keys())
         policy_network.load_state_dict(
             policy_network_dict[selector.episodes]
         )
@@ -340,11 +345,11 @@ class LTFMSelector:
             is not selected.
 
         log_actions : bool
-            If `True`, the progression of selected actions will be saved in 
-            `self.ActionsLog` which is a np.array of size 
+            If `True`, the progression of selected actions will be saved in
+            `self.ActionsLog` which is a np.array of size
             (self.episodes, self.max_timesteps).
 
-            Because not every episode has the length defined in 
+            Because not every episode has the length defined in
             `self.max_timesteps`, remaining time-steps not "filled" will
             assume values of -2.
         '''
@@ -408,10 +413,20 @@ class LTFMSelector:
             **kwargs
         )
 
-        # Initializing length of state and actions as public fields for
-        # loading the model later
-        self.state_length = len(env.state)
-        self.actions_length = len(env.actions)
+        # Take an environment and reset it simply for metadata initialization
+        _intenv = Environment(
+            self.X, self.y, self.background_dataset, self.y_pred_bg,
+            self.fQueryCost, self.fQueryFunction,
+            self.fThreshold, self.fCap, self.fRate,
+            self.mQueryCost,
+            self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
+            self.pType, self.regression_tol, self.regression_error_rounding,
+            self.pModels, self.device, sample_weight=self.sample_weight
+        )
+        _intenv.reset()
+
+        self.state_length   = len(_intenv.state)
+        self.actions_length = len(_intenv.actions)
 
         # Initializing the policy and target networks
         if isinstance(agent_neuralnetwork, nn.Module):
@@ -428,11 +443,11 @@ class LTFMSelector:
                 nLayer2 = agent_neuralnetwork[1]
 
             self.policy_net = DQN(
-                len(env.state), len(env.actions), nLayer1, nLayer2
+                len(_intenv.state), len(_intenv.actions), nLayer1, nLayer2
             ).to(self.device)
 
             self.target_net = DQN(
-                len(env.state), len(env.actions), nLayer1, nLayer2
+                len(_intenv.state), len(_intenv.actions), nLayer1, nLayer2
             ).to(self.device)
 
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -444,7 +459,7 @@ class LTFMSelector:
 
         # Training the agent over self.episodes
         if self.max_timesteps is None:
-            self.max_timesteps = env.nFeatures * 3
+            self.max_timesteps = _intenv.nFeatures * 3
 
         for i_episode in tqdm(range(self.episodes)):
             state = env.reset()
@@ -486,9 +501,9 @@ class LTFMSelector:
 
                 # Move on to next state
                 state = next_state
-                
+
                 # Optimize the model
-                _res = self.optimize_model(optimizer, loss_function, monitor, returnQ)
+                _res = self.optimize_model(optimizer, loss_function, monitor)
 
                 if monitor:
                     if not _res is None:
@@ -513,9 +528,8 @@ class LTFMSelector:
                     self.policy_network_checkpoints[i_episode + 1] =\
                         self.policy_net.state_dict()
 
-            if not self.episodes in self.policy_network_checkpoints:
-                self.policy_network_checkpoints[self.episodes] =\
-                    self.policy_net.state_dict()
+        # Save trained weights after all episodes
+        self.policy_network_checkpoints[self.episodes] = self.policy_net.state_dict()
 
         if monitor:
             writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
@@ -625,7 +639,7 @@ class LTFMSelector:
             with torch.no_grad():
                 return (self.policy_net(state).max(1)[1].view(1, 1) - 1)
 
-    def optimize_model(self, optimizer, loss_function, monitor, returnQ):
+    def optimize_model(self, optimizer, loss_function, monitor):
         '''
         Optimize the policy network.
 
@@ -634,10 +648,6 @@ class LTFMSelector:
         loss_function : {'mse', 'smoothl1'} or custom function
             Choice of loss function. Default is 'mse'. User may also pass
             own customized loss function, based on PyTorch.
-
-        returnQ : bool
-            Return average computed action-value functions and rewards of
-            the sampled batches, for debugging purposes.
         '''
         # Regarding notations used in comments:
         # s  : current state
@@ -645,9 +655,13 @@ class LTFMSelector:
         # s' : future state
         # Q  : action-value function (quality)
         #      (estimate of the cumulative reward, R)
-
         if len(self.ReplayMemory) < self.batch_size:
-            return
+            if monitor:
+                _res = (0., 0., 0.)
+            else:
+                _res = None
+
+            return _res
 
         # Step ---
         # 1. Draw a random batch of experiences
@@ -756,7 +770,7 @@ class LTFMSelector:
         # Optimize the model (policy network)
         optimizer.step()
 
-        if (monitor or returnQ):
+        if monitor:
             Q_avr = state_action_values.detach().numpy().mean()
             r_avr = reward_batch.unsqueeze(1).numpy().mean()
             V_avr = expected_state_action_values.unsqueeze(1).numpy().mean()
@@ -819,7 +833,7 @@ class LTFMSelector:
     def __setstate__(self, state):
         self.__dict__.update(state)
 
-    def get_bgPrediction(self, X, y, X_bg, sample_weight):
+    def get_bgPrediction(self, X, y, X_bg, sample_weight, **kwargs):
         '''
         Get prediction based on background dataset for each type of
         prediction model, fitted with the training samples, to be used

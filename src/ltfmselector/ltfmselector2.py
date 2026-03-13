@@ -1,4 +1,4 @@
-mport torch
+import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
@@ -13,7 +13,6 @@ from tqdm import tqdm
 from collections import defaultdict
 from joblib import Parallel, delayed
 
-from .logger import Logger
 from .env import Environment
 from .utils import ReplayMemory, DQN, Transition, balance_classDistribution_patient
 
@@ -24,52 +23,9 @@ from sklearn.linear_model import Ridge
 from sklearn.naive_bayes import GaussianNB
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 
-def load_model(filename, default_policy_net=True):
-    '''
-    Load a previously saved model. The list of prediction models will be
-    returned. User should manually load it, see example. This design
-    decision was made to account for users who might work with PyTorch and
-    TensorFlow models which should not be pickled whole.
-
-    Parameter
-    ---------
-    filename : str or Path.pathlib
-
-    default_policy_net : bool
-        If True, user used the default policy network during training
-
-    Returns
-    -------
-    pModels : list(tuple)
-        List of prediction models provided by user during training
-    '''
-    with tarfile.open(filename, 'r:gz') as tar:
-        with tar.extractfile('selector.pkl_ltfmselector') as f:
-            selector = pickle.load(f)
-
-        with tar.extractfile('pModels.pkl_list') as f:
-            pModels = pickle.load(f)
-
-        with tar.extractfile('policy_network_checkpoints.pkl_dict') as f:
-            policy_network_dict = pickle.load(f)
-
-    # Load policy network
-    if default_policy_net:
-        policy_network = DQN(
-            selector.state_length, selector.actions_length,
-            policy_network_dict["n1"],
-            policy_network_dict["n2"]
-        )
-        policy_network.load_state_dict(
-            policy_network_dict[selector.episodes]
-        )
-    selector.policy_net = policy_network
-
-    # Set pModels to None to ENSURE that user, manually sets the prediction
-    # models used earlier.
-    selector.pModels = None
-
-    return selector, pModels
+# Functions to clip predicted regression values
+capUpperValues = lambda x: 3.0 if x > 3.0 else x
+capLowerValues = lambda x: 0.0 if x < 0.0 else x
 
 class LTFMSelectorVectorized:
     def __init__(
@@ -342,11 +298,11 @@ class LTFMSelectorVectorized:
             is not selected.
 
         log_actions : bool
-            If `True`, the progression of selected actions will be saved in 
-            `self.ActionsLog` which is a np.array of size 
+            If `True`, the progression of selected actions will be saved in
+            `self.ActionsLog` which is a np.array of size
             (self.episodes, self.max_timesteps).
 
-            Because not every episode has the length defined in 
+            Because not every episode has the length defined in
             `self.max_timesteps`, remaining time-steps not "filled" will
             assume values of -2.
         '''
@@ -410,11 +366,23 @@ class LTFMSelectorVectorized:
                 self.pModels, self.device, sample_weight=self.sample_weight, **kwargs
             ) for i in tqdm(range(self.episodes), desc=f"Creating {self.episodes} environments")
         ]
+        if log_actions:
+            IDX = [i for i in range(self.episodes)]
 
-        # Initializing length of state and actions as public fields for
-        # loading the model later
-        self.state_length = len(envs[0].state)
-        self.actions_length = len(envs[0].actions)
+        # Take an environment and reset it simply for metadata initialization
+        _intenv = Environment(
+            self.X, self.y, self.background_dataset, self.y_pred_bg,
+            self.fQueryCost, self.fQueryFunction,
+            self.fThreshold, self.fCap, self.fRate,
+            self.mQueryCost,
+            self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
+            self.pType, self.regression_tol, self.regression_error_rounding,
+            self.pModels, self.device, sample_weight=self.sample_weight
+        )
+        _intenv.reset()
+
+        self.state_length   = len(_intenv.state)
+        self.actions_length = len(_intenv.actions)
 
         # Initializing the policy and target networks
         if isinstance(agent_neuralnetwork, nn.Module):
@@ -431,11 +399,11 @@ class LTFMSelectorVectorized:
                 nLayer2 = agent_neuralnetwork[1]
 
             self.policy_net = DQN(
-                len(envs[0].state), len(envs[0].actions), nLayer1, nLayer2
+                len(_intenv.state), len(_intenv.actions), nLayer1, nLayer2
             ).to(self.device)
 
             self.target_net = DQN(
-                len(envs[0].state), len(envs[0].actions), nLayer1, nLayer2
+                len(_intenv.state), len(_intenv.actions), nLayer1, nLayer2
             ).to(self.device)
 
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -447,7 +415,7 @@ class LTFMSelectorVectorized:
 
         # Training the agent over self.episodes
         if self.max_timesteps is None:
-            self.max_timesteps = envs[0].nFeatures * 3
+            self.max_timesteps = _intenv.nFeatures * 3
 
         # Reset all environments
         states = np.array(Parallel(n_jobs=-1, prefer="threads")(
@@ -463,7 +431,7 @@ class LTFMSelectorVectorized:
 
             # Log actions if desired
             if log_actions:
-                self.ActionsLog[:,t] = actions.numpy()
+                self.ActionsLog[IDX, t] = actions.squeeze(1).numpy()
 
             # If maximum time_steps is reached
             if t+1 == self.max_timesteps:
@@ -517,6 +485,8 @@ class LTFMSelectorVectorized:
 
             for i in reversed(envIdxToRemove):
                 del envs[i]
+                if log_actions:
+                    del IDX[i]
 
             # All environments have terminated
             if len(nextStates_onGoing) == 0:
@@ -544,6 +514,15 @@ class LTFMSelectorVectorized:
                     targetParameters[key]*(1 - self.tau)
 
             self.target_net.load_state_dict(targetParameters)
+
+            # Saving trained policy network intermediately
+            if not self.checkpoint_interval is None:
+                if (i_episode + 1) % self.checkpoint_interval == 0:
+                    self.policy_network_checkpoints[i_episode + 1] =\
+                        self.policy_net.state_dict()
+
+        # Save trained weights after all episodes
+        self.policy_network_checkpoints[self.episodes] = self.policy_net.state_dict()
 
         if monitor:
             writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
@@ -592,7 +571,8 @@ class LTFMSelectorVectorized:
             raise ValueError("X_test must be a pandas DataFrame!")
 
         # Create dictionary to save information per episode
-        self.doc_test = defaultdict(dict)
+        if log:
+            self.doc_test = defaultdict(dict)
 
         # Array to store predictions
         y_pred = pd.Series(np.zeros(X_test.shape[0]), index=X_test.index)
@@ -641,16 +621,17 @@ class LTFMSelectorVectorized:
                     nextStates_onGoing.append(sp)
                 else:
                     envIdxToRemove.append(i)
-
-                    doc_episode = {
-                        "SampleID": IDX[i],
-                        "PredModel": envs[i].get_prediction_model(),
-                        "Iterations": t+1,
-                        "Mask": envs[i].get_feature_mask(),
-                        "predModel_nChanges": envs[i].pm_nChange
-                    }
-                    self.doc_test[IDX[i]] = doc_episode
                     y_pred.at[IDX[i]] = envs[i].y_pred
+
+                    if log:
+                        doc_episode = {
+                            "SampleID": IDX[i],
+                            "PredModel": envs[i].get_prediction_model(),
+                            "Iterations": t+1,
+                            "Mask": envs[i].get_feature_mask(),
+                            "predModel_nChanges": envs[i].pm_nChange
+                        }
+                        self.doc_test[IDX[i]] = doc_episode
 
             for i in reversed(envIdxToRemove):
                 del envs[i]
@@ -717,7 +698,12 @@ class LTFMSelectorVectorized:
         #      (estimate of the cumulative reward, R)
 
         if len(self.ReplayMemory) < self.batch_size:
-            return
+            if monitor:
+                _res = (0., 0., 0.)
+            else:
+                _res = None
+
+            return _res
 
         # Step ---
         # 1. Draw a random batch of experiences
@@ -890,7 +876,7 @@ class LTFMSelectorVectorized:
     def __setstate__(self, state):
         self.__dict__.update(state)
 
-    def get_bgPrediction(self, X, y, X_bg, sample_weight):
+    def get_bgPrediction(self, X, y, X_bg, sample_weight, **kwargs):
         '''
         Get prediction based on background dataset for each type of
         prediction model, fitted with the training samples, to be used
@@ -902,7 +888,6 @@ class LTFMSelectorVectorized:
 
         ### Special-tailored implementation ###
         if self.smsproject:
-            print("IM HERE")
             X_train_wLabel = X.copy()
             X_train_wLabel["Target"] = y.loc[X_train_wLabel.index]
 

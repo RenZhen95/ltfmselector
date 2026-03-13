@@ -1,10 +1,10 @@
 [project]
 name = "ltfmselector"
-version = "0.2.3"
+version = "0.3.0"
 description = "Locally-Tailored Feature and Model Selector with Deep Q-Learning"
 readme = "README.md"
 authors = [
-    { name = "RenZhen95", email = "j-liaw@hotmail.com" }
+    { name = "RenZhen95", email = "jliawpro@outlook.de" }
 ]
 requires-python = ">=3.12"
 dependencies = [

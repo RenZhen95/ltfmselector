@@ -6,6 +6,9 @@ from collections import deque, namedtuple, defaultdict
 import torch.nn as nn
 import torch.nn.functional as F
 
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+
 # Transition object
 Transition = namedtuple(
     'Transition', ('state', 'action', 'next_state', 'reward')
@@ -157,3 +160,77 @@ def balance_classDistribution_patient(template_df, score):
 
     return df_sampleWeights
 
+def get_probInitialFeature(
+        X, y, n_estimators=100, random_state=42, n_jobs=None, pType="regression"
+):
+    '''
+    Trains a Random Forest ensemble, calculates feature importance, and
+    returns the probability of sampling a feature, based on its total
+    relative relevance.
+
+    Parameters
+    ----------
+    X : pandas.DataFrame or numpy.ndarray
+     - Training dataset
+
+    y : numpy.ndarray
+     - Training labels
+
+    n : int (default=100)
+     - Number of trees in ensemble
+
+    random_state : int
+     - Random seed
+
+    n_jobs : int
+     - Number of jobs to run in parallel, -1 for using all processors
+
+    pType : {'regression' or 'classification'}
+        Type of prediction to make
+
+    Returns
+    -------
+    probs : numpy.ndarray
+     - Probabily of sampling feature based on their relevance
+    '''
+    if pType == "regression":
+        rf = RandomForestRegressor(
+            n_estimators=n_estimators,
+            n_jobs= n_jobs,
+            random_state=random_state
+        )
+    elif pType == "classification":
+        rf = RandomForestClassifier(
+            n_estimators=n_estimators,
+            n_jobs= n_jobs,
+            random_state=random_state
+        )
+    else:
+        raise ValueError("'pType' must be 'regression' or 'classification'")
+
+    rf.fit(X, y)
+
+    # Get feature importance
+    # > scikit-learn's feature_importances_ sum to 1.0 by default
+    probs = rf.feature_importances_
+
+    return probs
+
+def sample_initialFeature(p):
+    '''
+    Takes an array, where each element pertains to the probability of sampling
+    a particular feature (i.e. p[3] : probability of sampling the 4th feature),
+    and returns a sampled feature.
+    
+    Parameters
+    ----------
+    p : numpy.ndarray or list
+     - Probability of sampling feature
+
+    Returns
+    -------
+    sampled_idx : int
+     - Index of feature
+    '''
+    # Sample a feature index based on the distribution
+    return np.random.choice(np.arange(len(p)), p=p)

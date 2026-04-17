@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
+import ptan
 import os, sys
 import random
 import pickle
@@ -26,6 +27,11 @@ from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 # Functions to clip predicted regression values
 capUpperValues = lambda x: 3.0 if x > 3.0 else x
 capLowerValues = lambda x: 0.0 if x < 0.0 else x
+
+# Epsilon progression for sampling random action
+epsExponential = lambda t_total: \
+    self.eps_end + (self.eps_start - self.eps_end) * \
+    np.exp(-1. * t_total / self.eps_decay)
 
 class LTFMSelectorVectorized:
     def __init__(
@@ -425,8 +431,11 @@ class LTFMSelectorVectorized:
         # >> Tensor(nEpisodes, |State|)
 
         for t in count():
-            # Make agent take an action
-            actions = self.select_action(states, envs)
+            # Make agent take an action             
+            actions = ptan.actions.EpsilonGreedyActionSelector(
+                epsilon=epsExponential(t)
+            )
+            # actions = self.select_action(states, envs)
             # >> Tensor(nEpisodes, 1) - Action selected for each environment
 
             # Log actions if desired
@@ -585,8 +594,15 @@ class LTFMSelectorVectorized:
         ))
         states = torch.tensor(states, dtype=torch.float32, device=self.device)
 
+        # Epsilon progression for sampling random action
+        eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
+            np.exp(-1. * self.total_actions / self.eps_decay)
+
         for t in count():
-            actions = self.select_action(states, envs)
+            actions = ptan.actions.EpsilonGreedyActionSelector(
+                epsilon
+            )
+            # actions = self.select_action(states, envs)
 
             if t+1 == self.max_timesteps:
                 actions = torch.tensor(

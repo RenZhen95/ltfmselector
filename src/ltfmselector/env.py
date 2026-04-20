@@ -42,8 +42,9 @@ class Environment:
             An extra row for 'Total', average feature values for all training
             samples
 
-        y_pred_bg : ``list of int or float``
-           Predictions from provided models on X_bg 
+        y_pred_bg : ``float``
+           Background prediction if agent predicts without recruiting any
+           feature
 
         fQueryCost : float
             Cost of querying a feature
@@ -279,7 +280,7 @@ class Environment:
             # Punish agent if it decides to predict without selecting any
             # features
             if len(col_to_retain) == 0:
-                self.y_pred = self.y_pred_bg[int(self.state[-1])]
+                self.y_pred = self.y_pred_bg
                 return [None, -self.p_wNoFCost, True]
 
             # === === === ===

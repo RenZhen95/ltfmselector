@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
-import ptan
 import os, sys
 import random
 import pickle
@@ -28,14 +27,9 @@ from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 capUpperValues = lambda x: 3.0 if x > 3.0 else x
 capLowerValues = lambda x: 0.0 if x < 0.0 else x
 
-# Epsilon progression for sampling random action
-epsExponential = lambda t_total: \
-    self.eps_end + (self.eps_start - self.eps_end) * \
-    np.exp(-1. * t_total / self.eps_decay)
-
 class LTFMSelectorVectorized:
     def __init__(
-            self, episodes, batch_size=256, tau=0.0005,
+            self, episodes, batch_size=512, epochs=10, tau=0.0005,
             eps_start=0.9, eps_end=0.05, eps_decay=1000,
             fQueryCost=0.01, fQueryFunction=None,
             fThreshold=None, fCap=None, fRate=None,
@@ -58,6 +52,10 @@ class LTFMSelectorVectorized:
 
         batch_size : int
             Batch size to train the policy network with
+
+        epochs : int
+            Number of epochs in updating the policy network at each update
+            step
 
         tau : float
             Update rate of the target network
@@ -168,6 +166,7 @@ class LTFMSelectorVectorized:
         self.device = device
 
         self.batch_size = batch_size
+        self.epochs = epochs
         self.tau = tau
         self.eps_start = eps_start
         self.eps_end = eps_end
@@ -246,7 +245,7 @@ class LTFMSelectorVectorized:
             self.pModels = pModels
 
         # Initializing the ReplayMemory
-        self.ReplayMemory = ReplayMemory(10000)
+        self.ReplayMemory = ReplayMemory(50000)
 
         self.total_actions = 0
 
@@ -356,9 +355,7 @@ class LTFMSelectorVectorized:
 
         # Getting background predictions here to generate multiple environments
         # in parallel
-        self.y_pred_bg = self.get_bgPrediction(
-            self.X, self.y, self.background_dataset, self.sample_weight, **kwargs
-        )
+        self.y_pred_bg = self.get_bgPrediction(**kwargs)
 
         # Initializing the environments in parallel
         envs = [
@@ -431,11 +428,7 @@ class LTFMSelectorVectorized:
         # >> Tensor(nEpisodes, |State|)
 
         for t in count():
-            # Make agent take an action             
-            actions = ptan.actions.EpsilonGreedyActionSelector(
-                epsilon=epsExponential(t)
-            )
-            # actions = self.select_action(states, envs)
+            actions = self.select_action(states, envs)
             # >> Tensor(nEpisodes, 1) - Action selected for each environment
 
             # Log actions if desired
@@ -450,7 +443,7 @@ class LTFMSelectorVectorized:
 
             # Agent carries out action in each environment and returns:
             # - Observations :: list(nEpisodes)
-            # >> Every element is the next state or None (termination
+            # >> Every element is the next state or None (termination)
             # - Rewards      :: list(nEpisodes)
             # - Terminations :: list(nEpisodes of boolean value)
             envTransition = []
@@ -505,9 +498,10 @@ class LTFMSelectorVectorized:
                 np.array(nextStates_onGoing), dtype=torch.float32, device=self.device
             ).squeeze(1)
 
-            # Optimize the model
-            _res = self.optimize_model(optimizer, loss_function, monitor)
-
+            # Optimize the model over user-desired number of epochs
+            for e in range(self.epochs):
+                _res = self.optimize_model(optimizer, loss_function, monitor)
+            sys.exit()
             if monitor:
                 writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
                 writer.add_scalar("Metrics/Average_Reward", _res[1], monitor_count)
@@ -594,13 +588,9 @@ class LTFMSelectorVectorized:
         ))
         states = torch.tensor(states, dtype=torch.float32, device=self.device)
 
-        # Epsilon progression for sampling random action
-        eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
-            np.exp(-1. * self.total_actions / self.eps_decay)
-
         for t in count():
-            actions = ptan.actions.EpsilonGreedyActionSelector(
-                epsilon
+            selector = ptan.actions.EpsilonGreedyActionSelector(
+                epsilon=self.getEpsilon(t)
             )
             # actions = self.select_action(states, envs)
 
@@ -721,7 +711,6 @@ class LTFMSelectorVectorized:
 
             return _res
 
-        # Step ---
         # 1. Draw a random batch of experiences
         experiences = self.ReplayMemory.sample(self.batch_size)
         # [
@@ -729,7 +718,7 @@ class LTFMSelectorVectorized:
         #    Experience #2: (state, action, next_state, reward),
         #    ...
         # ]
-
+        
         # Step ---
         # 2. Convert the experiences into batches, per "item"
         batch = Transition(*zip(*experiences))
@@ -739,7 +728,6 @@ class LTFMSelectorVectorized:
         #    s' : (#1, #2, ..., #BATCH_SIZE),
         #    r  : (#1, #2, ..., #BATCH_SIZE)
         # ]
-
         state_batch  = torch.cat(batch.state)
         action_batch = torch.cat(batch.action)
         reward_batch = torch.cat(batch.reward)
@@ -774,15 +762,9 @@ class LTFMSelectorVectorized:
         # action_batch+1 because the actions begin from [-1 0 1 2 ...],
         # where -1 indicates the action of making a prediction.
 
-        # To get the Q(s,a) of a taken, add 1 to a-value to get the index
-        # of the self.policy_net(state_batch) matrix, that pertains to the
-        # selected action, a
-
-        # Example: 3rd row of self.policy_net(state_batch) pertains to Q(s,a)
-        # of selecting the second feature
-
         # Step ---
-        # 6. Compute r + GAMMA * max_(a) {Q(s', a)} with the target network
+        # Double Deep Q-Learning
+        # 6. Compute r + GAMMA * {Qt(s', argmax_a Q(s', a))}
 
         # Q(s', a) computed based on "older" target network, selecting for
         # action that maximizes this term
@@ -892,52 +874,23 @@ class LTFMSelectorVectorized:
     def __setstate__(self, state):
         self.__dict__.update(state)
 
-    def get_bgPrediction(self, X, y, X_bg, sample_weight, **kwargs):
+    def get_bgPrediction(self, **kwargs):
         '''
-        Get prediction based on background dataset for each type of
-        prediction model, fitted with the training samples, to be used
-        for the case that the agent decides to make a prediction without
-        any recruited features.
+        Get prediction based on average targets/classes when the agent decides
+        to make a prediction without any recruited features.
         '''
-        # Initialize map between model type with background prediction
-        yBg_Model = []
+        if isinstance(self.y, pd.Series):
+            _y = (self.y.values).copy()
+        else:
+            _y = self.y.copy()
 
-        ### Special-tailored implementation ###
         if self.smsproject:
-            X_train_wLabel = X.copy()
-            X_train_wLabel["Target"] = y.loc[X_train_wLabel.index]
-
-            _weights = balance_classDistribution_patient(
-                X_train_wLabel, "Target"
-            ).to_numpy(dtype=np.float32)[:,0]
-        else:
-            _weights = sample_weight
-
-        # DataFrame or Series -> convert to numpy arrays
-        if isinstance(X, pd.DataFrame):
-            _X = X.values
-
-        if isinstance(y, pd.Series):
-            _y = y.values
-        else:
-            _y = y
-
-        for m in self.pModels:
-            # Fit each prediction model with the entire dataset
-            if _weights is None:
-                m.fit(_X, _y)
-            else:
-                m.fit(_X, _y, sample_weight=_weights)
-
-            # Use fitted model to make a prediction based on background
-            # dataset
-            yBg_Model.append(
-                m.predict(X_bg.loc[["Total"]])[0]
+            X_wTarget = self.X.iloc[:,0:2].copy()
+            X_wTarget["Target"] = _y
+            X_wTarget = X_wTarget.rename(
+                index=lambda x: x[0:5] if x.startswith('ES') else x[0:8]
             )
+            X_wTarget_patLevel = X_wTarget.groupby("StridePairID").mean()
+            _y = X_wTarget_patLevel["Target"]
 
-            # Capping values between 0 and 3
-            if self.smsproject:
-                yBg_Model[-1] = capUpperValues(yBg_Model[-1])
-                yBg_Model[-1] = capLowerValues(yBg_Model[-1])
-
-        return yBg_Model
+        return _y.mean()

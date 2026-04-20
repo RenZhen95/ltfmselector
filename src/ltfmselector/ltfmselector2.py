@@ -501,7 +501,7 @@ class LTFMSelectorVectorized:
             # Optimize the model over user-desired number of epochs
             for e in range(self.epochs):
                 _res = self.optimize_model(optimizer, loss_function, monitor)
-            sys.exit()
+
             if monitor:
                 writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
                 writer.add_scalar("Metrics/Average_Reward", _res[1], monitor_count)

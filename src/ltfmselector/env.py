@@ -173,31 +173,23 @@ class Environment:
         # Reset regressor result
         self.y_pred = None
 
+        # Background dataset computed based on average feature values of
+        # training dataset
+        self.X_avg = self.X_bg.loc[["Total"]]
+
+        # Training dataset
+        self.X_train = self.X
+        self.y_train = self.y
+
         if sample is None:
             # Features and target/class of randomly selected patient
             self.X_test = self.X.iloc[[i]]
             self.y_test = (self.y.iloc[[i]]).iloc[0]
 
-            # Background dataset computed based on average feature values of
-            # training dataset, with sample i exempted
-            self.X_avg = self.X_bg.iloc[[i]]
-
-            # Training dataset, with sample i exempted
-            self.X_train = self.X.drop(self.X.index[i])
-            self.y_train = self.y.drop(self.X.index[i])
-
         else:
             # Test sample passed by user
             self.X_test = sample
             self.y_test = None # indicating this is a test sample to predict
-
-            # Background dataset computed based on average feature values of
-            # training dataset
-            self.X_avg = self.X_bg.loc[["Total"]]
-
-            # Training dataset, using original X and y
-            self.X_train = self.X
-            self.y_train = self.y
 
         # Formulating the state (partially observable MDP)
         if len(self.pModels) > 1:
@@ -285,20 +277,6 @@ class Environment:
 
             # === === === ===
             # Make a prediction with selected features and prediction model
-
-            ### Special-tailored implementation ###
-            if self.smsproject:
-                testpatientID = getPatientID(X_test.index[0])
-                otherSP_of_testPatient = [
-                    sp for sp in X_train.index if getPatientID(sp) == testpatientID
-                ]
-                print(
-                    f"\n\nTest patient: {X_test.index[0]}\n" +
-                    f"- Other stride pairs: {otherSP_of_testPatient}"
-                )
-                X_train = X_train.drop(otherSP_of_testPatient)
-                y_train = y_train.drop(otherSP_of_testPatient)
-
             X_train = X_train[col_to_retain]
             X_test  = X_test[col_to_retain]
 

@@ -324,6 +324,7 @@ class Environment:
                     X_train, y_train, sample_weight=_weights
                 )
 
+            # Use PM to make a prediction
             self.y_pred = selected_predModel.predict(X_test)[0]
 
             if self.smsproject:

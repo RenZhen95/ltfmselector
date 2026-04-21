@@ -251,7 +251,7 @@ class LTFMSelectorVectorized:
         self.total_actions = 0
 
     def fit(
-            self, X, y, loss_function='mse', sample_weight=None,
+            self, X, y, n=10000, loss_function='mse', sample_weight=None,
             agent_neuralnetwork=None, lr=1e-5, monitor=False,
             log_actions=False, background_dataset=None, **kwargs
     ):
@@ -267,6 +267,11 @@ class LTFMSelectorVectorized:
 
         y : pd.Series
             Class/Target vector
+
+        n : int
+            Number of trees in the random forest ensemble, which will be used
+            to estimate the relative importance of features. Based on these
+            importances will the features be sampled as 'initial features'
 
         loss_function : {'mse', 'smoothl1'} or custom function
             Choice of loss function. Default is 'mse'. User may also pass
@@ -359,7 +364,7 @@ class LTFMSelectorVectorized:
         self.y_pred_bg = self.get_bgPrediction(**kwargs)
 
         # Initialize probability of each feature sampled as the initial feature
-        InitialFeatureP = self.get_probInitialFeature(self.X, self.y)
+        InitialFeatureP = self.get_probInitialFeature(self.X, self.y, n)
 
         # Initializing the environments in parallel
         envs = [
@@ -387,9 +392,7 @@ class LTFMSelectorVectorized:
             self.pType, InitialFeatureP,
             self.regression_tol, self.regression_error_rounding,
             self.pModels, self.device, sample_weight=self.sample_weight
-        )
-        _intenv.reset()
-
+        ); _intenv.reset()
         self.state_length   = len(_intenv.state)
         self.actions_length = len(_intenv.actions)
 
@@ -397,7 +400,6 @@ class LTFMSelectorVectorized:
         if isinstance(agent_neuralnetwork, nn.Module):
             self.policy_net = agent_neuralnetwork
             self.target_net = agent_neuralnetwork
-
         else:
             if agent_neuralnetwork is None:
                 nLayer1 = 1024
@@ -901,20 +903,23 @@ class LTFMSelectorVectorized:
 
         return _y.mean()
 
-    def get_probInitialFeature(self, X, y):
+    def get_probInitialFeature(self, X, y, n):
         '''
-        Trains a Random Forest ensemble of 10000 trees, calculates feature
+        Trains a Random Forest ensemble of n trees, calculates feature
         importance, and returns the probability of sampling a feature, based
         on its total relative relevance.
 
-        Returns
-        -------
+        Parameters
+        ----------
         X : pd.DataFrame
             Training dataset, pandas dataframe with the shape:
             (n_samples, n_features)
 
         y : pd.Series
             Class/Target vector
+
+        n : int
+            Number of trees
 
         Returns
         -------
@@ -928,11 +933,11 @@ class LTFMSelectorVectorized:
         )
         if self.pType == "regression":
             rf = RandomForestRegressor(
-                n_estimators=100, n_jobs=-1, random_state=42
+                n_estimators=n, n_jobs=-1, random_state=42
             )
         elif self.pType == "classification":
             rf = RandomForestClassifier(
-                n_estimators=10000, n_jobs=-1, random_state=42
+                n_estimators=n, n_jobs=-1, random_state=42
             )
         else:
             raise ValueError("'pType' must be 'regression' or 'classification'")

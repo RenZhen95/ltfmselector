@@ -4,10 +4,6 @@ import pandas as pd
 
 from .utils import balance_classDistribution_patient
 
-### Special-tailored implementation ###
-# Function to get patient's ID given a stride pair ID
-getPatientID = lambda x: x[0:5] if x.startswith("ES") else x[0:8]
-
 # Functions to clip predicted regression values
 capUpperValues = lambda x: 3.0 if x > 3.0 else x
 capLowerValues = lambda x: 0.0 if x < 0.0 else x
@@ -18,7 +14,7 @@ class Environment:
             fQueryCost, fQueryFunction,
             fThreshold, fCap, fRate,
             mQueryCost,
-            fRepeatQueryCost, p_wNoFCost, errorCost, pType,
+            fRepeatQueryCost, p_wNoFCost, errorCost, pType, iniFP,
             regression_tol, regression_error_rounding, pModels, device,
             sample_weight=None, **kwargs
     ):
@@ -54,9 +50,9 @@ class Environment:
 
         fThreshold : None or int
             If `fQueryFunction == {'step', 'linear', 'quadratic', 'exponential'}`
-            Threshold of number of features, before cost of recruiting 
+            Threshold of number of features, before cost of recruiting
             increases
-            
+
         fCap : None or float
             If `fQueryFunction == {'step'}`, upper limit of penalty
 
@@ -84,6 +80,9 @@ class Environment:
 
         pType : {'regression' or 'classification'}
             Type of prediction to make
+
+        iniFP : numpy.ndarray
+            Probability of each feature being selected as an initial feature
 
         regression_tol : float
             Only applicable for regression models, punish agent if prediction
@@ -133,6 +132,9 @@ class Environment:
         self.nSamples = self.X.shape[0]
         self.nFeatures = self.X.shape[1]
 
+        # Probability of features being selected as initial feature
+        self.p_InitialF = iniFP
+
         # Agent's actions
         #  - Include option of selecting prediction
         if len(self.pModels) > 1:
@@ -159,7 +161,7 @@ class Environment:
         3. If training, a random sample is selected from the training dataset
         4. If test, a test sample is passed as sample
         '''
-        # Training the agent
+        # Get a random sample from the training dataset
         if sample is None:
             # Random sample from X
             i = random.randint(0, self.nSamples - 1)
@@ -207,6 +209,13 @@ class Environment:
                     np.zeros(self.nFeatures)
                 )
             )
+
+        # Sample initial feature
+        inif = self.sample_initialFeature()
+
+        # Update the state
+        self.state[inif] = self.X_test.iloc[0, inif]
+        self.state[self.nFeatures + inif] = 1
 
         # Counter for prediction model change
         self.pm_nChange = 0
@@ -419,3 +428,19 @@ class Environment:
         print(state.keys())
 
         del state['pModels']
+
+    def sample_initialFeature(self):
+        '''
+        Takes an array, where each element pertains to the probability of sampling
+        a particular feature (i.e. p[3] : probability of sampling the 4th feature),
+        and returns a sampled feature.
+
+        Returns
+        -------
+        sampled_idx : int
+         - Index of feature
+        '''
+        # Sample a feature index based on the distribution
+        return np.random.choice(
+            np.arange(len(self.p_InitialF)), p=self.p_InitialF
+        )

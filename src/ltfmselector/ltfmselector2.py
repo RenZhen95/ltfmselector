@@ -247,6 +247,7 @@ class LTFMSelectorVectorized:
         # Initializing the ReplayMemory
         self.ReplayMemory = ReplayMemory(50000)
 
+        # Initialize counter to track total actions already taken
         self.total_actions = 0
 
     def fit(
@@ -357,6 +358,9 @@ class LTFMSelectorVectorized:
         # in parallel
         self.y_pred_bg = self.get_bgPrediction(**kwargs)
 
+        # Initialize probability of each feature sampled as the initial feature
+        InitialFeatureP = self.get_probInitialFeature(self.X, self.y)
+
         # Initializing the environments in parallel
         envs = [
             Environment(
@@ -365,7 +369,8 @@ class LTFMSelectorVectorized:
                 self.fThreshold, self.fCap, self.fRate,
                 self.mQueryCost,
                 self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
-                self.pType, self.regression_tol, self.regression_error_rounding,
+                self.pType, InitialFeatureP,
+                self.regression_tol, self.regression_error_rounding,
                 self.pModels, self.device, sample_weight=self.sample_weight, **kwargs
             ) for i in tqdm(range(self.episodes), desc=f"Creating {self.episodes} environments")
         ]
@@ -379,7 +384,8 @@ class LTFMSelectorVectorized:
             self.fThreshold, self.fCap, self.fRate,
             self.mQueryCost,
             self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
-            self.pType, self.regression_tol, self.regression_error_rounding,
+            self.pType, InitialFeatureP,
+            self.regression_tol, self.regression_error_rounding,
             self.pModels, self.device, sample_weight=self.sample_weight
         )
         _intenv.reset()
@@ -499,9 +505,9 @@ class LTFMSelectorVectorized:
             ).squeeze(1)
 
             # Optimize the model over user-desired number of epochs
-            for e in range(self.epochs):
+            for _ in range(self.epochs):
                 _res = self.optimize_model(optimizer, loss_function, monitor)
-
+            sys.exit()
             if monitor:
                 writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
                 writer.add_scalar("Metrics/Average_Reward", _res[1], monitor_count)
@@ -718,7 +724,7 @@ class LTFMSelectorVectorized:
         #    Experience #2: (state, action, next_state, reward),
         #    ...
         # ]
-        
+
         # Step ---
         # 2. Convert the experiences into batches, per "item"
         batch = Transition(*zip(*experiences))
@@ -731,7 +737,7 @@ class LTFMSelectorVectorized:
         state_batch  = torch.cat(batch.state)
         action_batch = torch.cat(batch.action)
         reward_batch = torch.cat(batch.reward)
-
+        print(state_batch)
         # Step ---
         # 3. Get a boolean mask of non-final states (iterations)
         #    - s' is None if environment terminates
@@ -894,3 +900,47 @@ class LTFMSelectorVectorized:
             _y = X_wTarget_patLevel["Target"]
 
         return _y.mean()
+
+    def get_probInitialFeature(self, X, y):
+        '''
+        Trains a Random Forest ensemble of 10000 trees, calculates feature
+        importance, and returns the probability of sampling a feature, based
+        on its total relative relevance.
+
+        Returns
+        -------
+        X : pd.DataFrame
+            Training dataset, pandas dataframe with the shape:
+            (n_samples, n_features)
+
+        y : pd.Series
+            Class/Target vector
+
+        Returns
+        -------
+        probs : numpy.ndarray
+         - Probabily of sampling feature based on their relevance
+        '''
+        print(
+            "Initializing the probability of a feature being selected as " +
+            "an initial feature, based on the feature's importance in a " +
+            "random forest ensemble ..."
+        )
+        if self.pType == "regression":
+            rf = RandomForestRegressor(
+                n_estimators=100, n_jobs=-1, random_state=42
+            )
+        elif self.pType == "classification":
+            rf = RandomForestClassifier(
+                n_estimators=10000, n_jobs=-1, random_state=42
+            )
+        else:
+            raise ValueError("'pType' must be 'regression' or 'classification'")
+
+        rf.fit(X, y)
+
+        # Get feature importance
+        # > scikit-learn's feature_importances_ sum to 1.0 by default
+        probs = rf.feature_importances_
+
+        return probs

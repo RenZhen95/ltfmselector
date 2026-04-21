@@ -6,6 +6,9 @@ from collections import deque, namedtuple, defaultdict
 import torch.nn as nn
 import torch.nn.functional as F
 
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+
 # Transition object
 Transition = namedtuple(
     'Transition', ('state', 'action', 'next_state', 'reward')
@@ -156,4 +159,3 @@ def balance_classDistribution_patient(template_df, score):
             df_sampleWeights.at[idx, 'Weight'] = df_sampleWeights.at[idx, 'Weight'] / patient_nStrides_dict[patient]
 
     return df_sampleWeights
-

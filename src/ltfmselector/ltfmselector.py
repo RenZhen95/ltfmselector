@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
+from joblib import Parallel, delayed
 
 from .env import Environment
 from .utils import ReplayMemory, DQN, Transition, balance_classDistribution_patient
@@ -76,7 +77,7 @@ def load_model(filename, default_policy_net=True):
 
 class LTFMSelector:
     def __init__(
-            self, episodes, batch_size=256, tau=0.0005,
+            self, episodes, batch_size=512, epochs=10, tau=0.0005,
             eps_start=0.9, eps_end=0.05, eps_decay=1000,
             fQueryCost=0.01, fQueryFunction=None,
             fThreshold=None, fCap=None, fRate=None,
@@ -99,6 +100,10 @@ class LTFMSelector:
 
         batch_size : int
             Batch size to train the policy network with
+
+        epochs : int
+            Number of epochs in updating the policy network at each update
+            step
 
         tau : float
             Update rate of the target network
@@ -209,6 +214,7 @@ class LTFMSelector:
         self.device = device
 
         self.batch_size = batch_size
+        self.epochs = epochs
         self.tau = tau
         self.eps_start = eps_start
         self.eps_end = eps_end
@@ -287,12 +293,13 @@ class LTFMSelector:
             self.pModels = pModels
 
         # Initializing the ReplayMemory
-        self.ReplayMemory = ReplayMemory(10000)
+        self.ReplayMemory = ReplayMemory(50000)
 
+        # Initialize counter to track total actions already taken
         self.total_actions = 0
 
     def fit(
-            self, X, y, loss_function='mse', sample_weight=None,
+            self, X, y, n=10000, loss_function='mse', sample_weight=None,
             agent_neuralnetwork=None, lr=1e-5, monitor=False,
             log_actions=False, background_dataset=None, **kwargs
     ):
@@ -308,6 +315,11 @@ class LTFMSelector:
 
         y : pd.Series
             Class/Target vector
+
+        n : int
+            Number of trees in the random forest ensemble, which will be used
+            to estimate the relative importance of features. Based on these
+            importances will the features be sampled as 'initial features'
 
         loss_function : {'mse', 'smoothl1'} or custom function
             Choice of loss function. Default is 'mse'. User may also pass
@@ -397,21 +409,26 @@ class LTFMSelector:
 
         # Getting background predictions here to generate multiple environments
         # in parallel
-        self.y_pred_bg = self.get_bgPrediction(
-            self.X, self.y, self.background_dataset, self.sample_weight, **kwargs
-        )
+        self.y_pred_bg = self.get_bgPrediction(**kwargs)
 
-        # Initializing the environment
-        env = Environment(
-            self.X, self.y, self.background_dataset, self.y_pred_bg,
-            self.fQueryCost, self.fQueryFunction,
-            self.fThreshold, self.fCap, self.fRate,
-            self.mQueryCost,
-            self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
-            self.pType, self.regression_tol, self.regression_error_rounding,
-            self.pModels, self.device, sample_weight=self.sample_weight,
-            **kwargs
-        )
+        # Initialize probability of each feature sampled as the initial feature
+        InitialFeatureP = self.get_probInitialFeature(self.X, self.y, n)
+
+        # Initializing the environments in parallel
+        envs = [
+            Environment(
+                self.X, self.y, self.background_dataset, self.y_pred_bg,
+                self.fQueryCost, self.fQueryFunction,
+                self.fThreshold, self.fCap, self.fRate,
+                self.mQueryCost,
+                self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
+                self.pType, InitialFeatureP,
+                self.regression_tol, self.regression_error_rounding,
+                self.pModels, self.device, sample_weight=self.sample_weight, **kwargs
+            ) for i in tqdm(range(self.episodes), desc=f"Creating {self.episodes} environments")
+        ]
+        if log_actions:
+            IDX = [i for i in range(self.episodes)]
 
         # Take an environment and reset it simply for metadata initialization
         _intenv = Environment(
@@ -420,11 +437,10 @@ class LTFMSelector:
             self.fThreshold, self.fCap, self.fRate,
             self.mQueryCost,
             self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
-            self.pType, self.regression_tol, self.regression_error_rounding,
+            self.pType, InitialFeatureP,
+            self.regression_tol, self.regression_error_rounding,
             self.pModels, self.device, sample_weight=self.sample_weight
-        )
-        _intenv.reset()
-
+        ); _intenv.reset()
         self.state_length   = len(_intenv.state)
         self.actions_length = len(_intenv.actions)
 
@@ -432,7 +448,6 @@ class LTFMSelector:
         if isinstance(agent_neuralnetwork, nn.Module):
             self.policy_net = agent_neuralnetwork
             self.target_net = agent_neuralnetwork
-
         else:
             if agent_neuralnetwork is None:
                 nLayer1 = 1024
@@ -461,66 +476,103 @@ class LTFMSelector:
         if self.max_timesteps is None:
             self.max_timesteps = _intenv.nFeatures * 3
 
-        for i_episode in tqdm(range(self.episodes)):
-            state = env.reset()
+        # Reset all environments
+        states = np.array(Parallel(n_jobs=-1, prefer="threads")(
+            delayed(env.reset)() for env in envs
+        ))
+        states = torch.tensor(states, dtype=torch.float32, device=self.device)
+        # >> Tensor(nEpisodes, |State|)
 
-            # Convert state to pytorch tensor
-            state = torch.tensor(
-                state, dtype=torch.float32, device=self.device
+        for t in count():
+            actions = self.select_action(states, envs)
+            # >> Tensor(nEpisodes, 1) - Action selected for each environment
+
+            # Log actions if desired
+            if log_actions:
+                self.ActionsLog[IDX, t] = actions.squeeze(1).numpy()
+
+            # If maximum time_steps is reached
+            if t+1 == self.max_timesteps:
+                actions = torch.tensor(
+                    [-1 for e in range(len(envs))], device=self.device
+                ).view(len(envs), 1)
+
+            # Agent carries out action in each environment and returns:
+            # - Observations :: list(nEpisodes)
+            # >> Every element is the next state or None (termination)
+            # - Rewards      :: list(nEpisodes)
+            # - Terminations :: list(nEpisodes of boolean value)
+            envTransition = []
+            for envIdx, env in enumerate(tqdm(envs)):
+                envTransition.append(env.step(actions[envIdx, 0].item()))
+
+            observations, rewards, terminations = zip(*envTransition)
+            observations = list(observations)
+            rewards = torch.tensor(
+                list(rewards), device=self.device
+            ).view(len(envs), 1)
+            terminations = list(terminations)
+
+            get_nextState = lambda x, o: None if x else torch.tensor(
+                o, dtype=torch.float32, device=self.device
             ).unsqueeze(0)
 
-            for t in count():
-                # Make agent take an action
-                action = self.select_action(state, env)
+            nextStates = Parallel(n_jobs=-1, prefer="threads")(
+                delayed(get_nextState)(t, o) for t, o in zip(terminations, observations)
+            )
 
-                # Log actions if desired
-                if log_actions:
-                    self.ActionsLog[i_episode,t] = int(
-                        action.squeeze(1).numpy()[0]
-                    )
-
-                if t+1 == self.max_timesteps:
-                    action = torch.tensor([[-1]], device=self.device)
-
-                # Agent carries out action on the environment and returns:
-                # - observation (state in next time-step)
-                # - reward
-                observation, reward, terminated = env.step(action.item())
-
-                if terminated:
-                    next_state = None
-                else:
-                    next_state = torch.tensor(
-                        observation, dtype=torch.float32, device=self.device
-                    ).unsqueeze(0)
-
-                self.ReplayMemory.push(
-                    state, action, next_state,
-                    torch.tensor([reward], device=self.device)
+            # Push to replay buffer
+            Parallel(n_jobs=-1, prefer="threads")(
+                delayed(self.ReplayMemory.push)(
+                    s.unsqueeze(0), a.unsqueeze(0), sp, r
+                ) for s, a, sp, r in zip(
+                    torch.unbind(states, dim=0), torch.unbind(actions, dim=0),
+                    nextStates, rewards
                 )
+            )
 
-                # Move on to next state
-                state = next_state
+            # Update next state
+            # - Kick out environments that have ended from `envs` and `states`
+            nextStates_onGoing = []
+            envIdxToRemove     = []
+            for i, sp in enumerate(nextStates):
+                if not sp is None:
+                    nextStates_onGoing.append(sp)
+                else:
+                    envIdxToRemove.append(i)
 
-                # Optimize the model
+            for i in reversed(envIdxToRemove):
+                del envs[i]
+                if log_actions:
+                    del IDX[i]
+
+            # All environments have terminated
+            if len(nextStates_onGoing) == 0:
+                break
+
+            states = torch.tensor(
+                np.array(nextStates_onGoing), dtype=torch.float32, device=self.device
+            ).squeeze(1)
+
+            # Optimize the model over user-desired number of epochs
+            for _ in range(self.epochs):
                 _res = self.optimize_model(optimizer, loss_function, monitor)
 
-                if monitor:
-                    if not _res is None:
-                        writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
-                        writer.add_scalar("Metrics/Average_Reward", _res[1], monitor_count)
-                        writer.add_scalar("Metrics/Average_Target", _res[2], monitor_count)
-                        monitor_count += 1
+            if monitor:
+                writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
+                writer.add_scalar("Metrics/Average_Reward", _res[1], monitor_count)
+                writer.add_scalar("Metrics/Average_Target", _res[2], monitor_count)
+                monitor_count += 1
 
-                # Apply soft update to target network's weights
-                targetParameters = self.target_net.state_dict()
-                policyParameters = self.policy_net.state_dict()
+            # Apply soft update to target network's weights
+            targetParameters = self.target_net.state_dict()
+            policyParameters = self.policy_net.state_dict()
 
-                for key in policyParameters:
-                    targetParameters[key] = policyParameters[key]*self.tau + \
-                        targetParameters[key]*(1 - self.tau)
+            for key in policyParameters:
+                targetParameters[key] = policyParameters[key]*self.tau + \
+                    targetParameters[key]*(1 - self.tau)
 
-                self.target_net.load_state_dict(targetParameters)
+            self.target_net.load_state_dict(targetParameters)
 
             # Saving trained policy network intermediately
             if not self.checkpoint_interval is None:
@@ -556,73 +608,115 @@ class LTFMSelector:
         y_pred : pd.Series
             Target/Class predicted for X_test
         '''
-        # Initializing the environment
-        env = Environment(
-            self.X, self.y, self.background_dataset, self.y_pred_bg,
-            self.fQueryCost, self.fQueryFunction,
-            self.fThreshold, self.fCap, self.fRate,
-            self.mQueryCost,
-            self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
-            self.pType, self.regression_tol, self.regression_error_rounding,
-            self.pModels, self.device, sample_weight=self.sample_weight,
-            **kwargs
-        )
+        # Initializing the environments in parallel for each test sample
+        envs = [
+            Environment(
+                self.X, self.y, self.background_dataset, self.y_pred_bg,
+                self.fQueryCost, self.fQueryFunction,
+                self.fThreshold, self.fCap, self.fRate,
+                self.mQueryCost,
+                self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
+                self.pType, InitialFeatureP,
+                self.regression_tol, self.regression_error_rounding,
+                self.pModels, self.device, sample_weight=self.sample_weight, **kwargs
+            ) for i in tqdm(
+                range(X_test.shape[0]),
+                desc=f"Creating {X_test.shape[0]} environments for each test sample"
+            )
+        ]
+        if isinstance(X_test, pd.DataFrame):
+            IDX = list(X_test.index)
+        else:
+            raise ValueError("X_test must be a pandas DataFrame!")
 
         # Create dictionary to save information per episode
-        self.doc_test = defaultdict(dict)
+        if log:
+            self.doc_test = defaultdict(dict)
 
         # Array to store predictions
         y_pred = pd.Series(np.zeros(X_test.shape[0]), index=X_test.index)
 
-        for i, test_sample in enumerate(tqdm(X_test.index)):
-            state = env.reset(sample=X_test.loc[[test_sample]])
+        # Reset all environments
+        states = np.array(Parallel(n_jobs=-1, prefer="threads")(
+            delayed(env.reset)(
+                sample=X_test.iloc[[i]]
+            ) for i, env in enumerate(envs)
+        ))
+        states = torch.tensor(states, dtype=torch.float32, device=self.device)
 
-            # Convert state to pytorch tensor
-            state = torch.tensor(
-                state, dtype=torch.float32, device=self.device
+        for t in count():
+            actions = self.select_action(states, envs)
+
+            if t+1 == self.max_timesteps:
+                actions = torch.tensor(
+                    [-1 for e in range(len(envs))], device=self.device
+                ).view(len(envs), 1)
+
+            envTransition = []
+            for envIdx, env in enumerate(tqdm(envs)):
+                envTransition.append(env.step(actions[envIdx, 0].item()))
+
+            observations, rewards, terminations = zip(*envTransition)
+            observations = list(observations)
+            rewards = torch.tensor(
+                list(rewards), device=self.device
+            ).view(len(envs), 1)
+            terminations = list(terminations)
+
+            get_nextState = lambda x, o: None if x else torch.tensor(
+                o, dtype=torch.float32, device=self.device
             ).unsqueeze(0)
 
-            for t in count():
-                action = self.select_action(state, env)
+            nextStates = Parallel(n_jobs=-1, prefer="threads")(
+                delayed(get_nextState)(t, o) for t, o in zip(terminations, observations)
+            )
 
-                if t+1 == self.max_timesteps:
-                    action = torch.tensor([[-1]], device=self.device)
-
-                observation, reward, terminated = env.step(action.item())
-
-                if terminated:
-                    next_state = None
-                    doc_episode = {
-                        "SampleID": test_sample,
-                        "PredModel": env.get_prediction_model(),
-                        "Iterations": t+1,
-                        "Mask": env.get_feature_mask(),
-                        "predModel_nChanges": env.pm_nChange
-                    }
-                    self.doc_test[test_sample] = doc_episode
-                    y_pred.at[test_sample] = env.y_pred
-
-                    break
+            # Update next state
+            # - Kick out environments that have ended from `envs` and `states`
+            nextStates_onGoing = []
+            envIdxToRemove     = []
+            for i, sp in enumerate(nextStates):
+                if not sp is None:
+                    nextStates_onGoing.append(sp)
                 else:
-                    next_state = torch.tensor(
-                        observation, dtype=torch.float32, device=self.device
-                    ).unsqueeze(0)
+                    envIdxToRemove.append(i)
+                    y_pred.at[IDX[i]] = envs[i].y_pred
 
-                    state = next_state
+                    if log:
+                        doc_episode = {
+                            "SampleID": IDX[i],
+                            "PredModel": envs[i].get_prediction_model(),
+                            "Iterations": t+1,
+                            "Mask": envs[i].get_feature_mask(),
+                            "predModel_nChanges": envs[i].pm_nChange
+                        }
+                        self.doc_test[IDX[i]] = doc_episode
+
+            for i in reversed(envIdxToRemove):
+                del envs[i]
+                del IDX[i]
+
+            # All environments have terminated
+            if len(nextStates_onGoing) == 0:
+                break
+
+            states = torch.tensor(
+                np.array(nextStates_onGoing), dtype=torch.float32, device=self.device
+            ).squeeze(1)
 
         return y_pred
 
-    def select_action(self, state, env):
+    def select_action(self, states, envs):
         '''
-        Select an action based on the given state. For exploration an
+        Select an action based on the given states. For exploration an
         epsilon-greedy strategy is implemented - the agent will for an
         epsilon probability choose a random action, instead of using the
         policy network.
 
         Parameters
         ----------
-        state : np.array
-            State of environment
+        states : torch.Tensor
+            State of environments generated in parallel
         '''
         # Probability of choosing random actions, instead of best action
         # - Probability decreases exponentially over time
@@ -631,13 +725,20 @@ class LTFMSelector:
 
         self.total_actions += 1
 
+        # Perform random action
         if eps_threshold > random.random():
             return torch.tensor(
-                [[env.get_random_action()]], device=self.device, dtype=torch.long
-            )
+                [env.get_random_action() for env in envs],
+                device=self.device, dtype=torch.long
+            ).view(states.shape[0], 1)
+
+        # Perform maximizing action
         else:
             with torch.no_grad():
-                return (self.policy_net(state).max(1)[1].view(1, 1) - 1)
+                QValues = self.policy_net(states)
+                # >> Tensor(nEpisodes, |Actions (Predict + #Features + #PM)|)
+
+                return (QValues.max(1)[1].view(states.shape[0], 1) - 1)
 
     def optimize_model(self, optimizer, loss_function, monitor):
         '''
@@ -655,6 +756,7 @@ class LTFMSelector:
         # s' : future state
         # Q  : action-value function (quality)
         #      (estimate of the cumulative reward, R)
+
         if len(self.ReplayMemory) < self.batch_size:
             if monitor:
                 _res = (0., 0., 0.)
@@ -663,8 +765,8 @@ class LTFMSelector:
 
             return _res
 
-        # Step ---
-        # 1. Draw a random batch of experiences
+        # Step 1 ---
+        # Draw a random batch of experiences
         experiences = self.ReplayMemory.sample(self.batch_size)
         # [
         #    Experience #1: (state, action, next_state, reward),
@@ -672,8 +774,8 @@ class LTFMSelector:
         #    ...
         # ]
 
-        # Step ---
-        # 2. Convert the experiences into batches, per "item"
+        # Step 2 ---
+        # Convert the experiences into batches, per "item"
         batch = Transition(*zip(*experiences))
         # [
         #    s  : (#1, #2, ..., #BATCH_SIZE),
@@ -681,14 +783,13 @@ class LTFMSelector:
         #    s' : (#1, #2, ..., #BATCH_SIZE),
         #    r  : (#1, #2, ..., #BATCH_SIZE)
         # ]
-
         state_batch  = torch.cat(batch.state)
         action_batch = torch.cat(batch.action)
         reward_batch = torch.cat(batch.reward)
 
-        # Step ---
-        # 3. Get a boolean mask of non-final states (iterations)
-        #    - s' is None if environment terminates
+        # Step 3 ---
+        # Get a boolean mask of non-final states (iterations)
+        # - s' is None if environment terminates
         non_final_mask = torch.tensor(
             tuple(
                 map(lambda s: s is not None, batch.next_state)
@@ -699,45 +800,46 @@ class LTFMSelector:
         # >> B = tuple(map(lambda s: s < 10, A))
         # (True False True True False)
 
-        # Step ---
-        # 4. Get a batch of non-final next_states of tensor dimensions:
-        #    - (<#BATCH_SIZE (except final states), (#features * 2)+1)
+        # Step 4 ---
+        # Get a batch of non-final next_states of tensor dimensions:
+        # - (<#BATCH_SIZE (except final states), (#features * 2)+1)
         non_final_next_states = torch.cat(
             [s for s in batch.next_state if s is not None]
         )
 
-        # Step ---
-        # 5. Compute Q(s, a) of each sampled state-action pair from
-        #    with the policy network
+        # Step 5 ---
+        # Compute Q(s, a) of each sampled state-action pair from with the
+        # policy network
         state_action_values = self.policy_net(state_batch).gather(
             1, action_batch+1
         ).float()
         # action_batch+1 because the actions begin from [-1 0 1 2 ...],
         # where -1 indicates the action of making a prediction.
 
-        # To get the Q(s,a) of a taken, add 1 to a-value to get the index
-        # of the self.policy_net(state_batch) matrix, that pertains to the
-        # selected action, a
+        # Step 6 ---
+        # Double Deep Q-Learning, where Q' denotes the target network, compute
+        # r + GAMMA * Q'(s', argmax_{a'} Q(s', a'))
 
-        # Example: 3rd row of self.policy_net(state_batch) pertains to Q(s,a)
-        # of selecting the second feature
-
-        # Step ---
-        # 6. Compute r + GAMMA * max_(a) {Q(s', a)} with the target network
-
-        # Q(s', a) computed based on "older" target network, selecting for
-        # action that maximizes this term
+        # Q'(s', a') computed based on "older" target network, but actions a'
+        # selected by policy network
 
         # This is merged, per non_final_mask, such that we'll have either:
-        #  1. r + GAMMA * max_(a) {Q(s', a)}
-        #  2. 0 (cause that state was final for that episode)
+        #  1. r + GAMMA * Q'(s', argmax_{a'} Q(s', a')) >> non-final
+        #  2. r                                         >> final
         next_state_values = torch.zeros(
             self.batch_size, device=self.device, dtype=torch.float32
         )
         with torch.no_grad():
+            # Get maximizing action from policy_net, action space:
+            # [-1, 0, 1, 2, ..., D+1, D+2, ..., D+G]
+            # !! Do not confuse the action notation with the action index !!
+            maxActionsIdx = self.policy_net(
+                non_final_next_states
+            ).max(1)[1].unsqueeze(-1)
+
             next_state_values[non_final_mask] = self.target_net(
                 non_final_next_states
-            ).max(1)[0].float()
+            ).gather(1, maxActionsIdx).squeeze(-1)
 
         expected_state_action_values = (
             reward_batch + (next_state_values * self.gamma)
@@ -748,8 +850,8 @@ class LTFMSelector:
             expected_state_action_values, max=0.0
         )
 
-        # Step ---
-        # 7. Compute loss
+        # Step 7 ---
+        # Compute loss
         if isinstance(loss_function, str):
             if loss_function == 'mse':
                 criterion = nn.MSELoss()
@@ -833,51 +935,70 @@ class LTFMSelector:
     def __setstate__(self, state):
         self.__dict__.update(state)
 
-    def get_bgPrediction(self, X, y, X_bg, sample_weight, **kwargs):
+    def get_bgPrediction(self, **kwargs):
         '''
-        Get prediction based on background dataset for each type of
-        prediction model, fitted with the training samples, to be used
-        for the case that the agent decides to make a prediction without
-        any recruited features.
+        Get prediction based on average targets/classes when the agent decides
+        to make a prediction without any recruited features.
         '''
-        # Initialize map between model type with background prediction
-        yBg_Model = []
-
-        ### Special-tailored implementation ###
-        if self.smsproject:
-            print("IM HERE")
-            X_train_wLabel = X.copy()
-            X_train_wLabel["Target"] = y.loc[X_train_wLabel.index]
-
-            _weights = balance_classDistribution_patient(
-                X_train_wLabel, "Target"
-            ).to_numpy(dtype=np.float32)[:,0]
+        if isinstance(self.y, pd.Series):
+            _y = (self.y.values).copy()
         else:
-            _weights = sample_weight
+            _y = self.y.copy()
 
-        # DataFrame or Series -> convert to numpy arrays
-        if isinstance(X, pd.DataFrame):
-            _X = X.values
-
-        if isinstance(y, pd.Series):
-            _y = y.values
-
-        for m in self.pModels:
-            # Fit each prediction model with the entire dataset
-            if _weights is None:
-                m.fit(_X, _y)
-            else:
-                m.fit(_X, _y, sample_weight=_weights)
-
-            # Use fitted model to make a prediction based on background
-            # dataset
-            yBg_Model.append(
-                m.predict(X_bg.loc[["Total"]])[0]
+        if self.smsproject:
+            X_wTarget = self.X.iloc[:,0:2].copy()
+            X_wTarget["Target"] = _y
+            X_wTarget = X_wTarget.rename(
+                index=lambda x: x[0:5] if x.startswith('ES') else x[0:8]
             )
+            X_wTarget_patLevel = X_wTarget.groupby("StridePairID").mean()
+            _y = X_wTarget_patLevel["Target"]
 
-            # Capping values between 0 and 3
-            if self.smsproject:
-                yBg_Model[-1] = capUpperValues(yBg_Model[-1])
-                yBg_Model[-1] = capLowerValues(yBg_Model[-1])
+        return _y.mean()
 
-        return yBg_Model
+    def get_probInitialFeature(self, X, y, n):
+        '''
+        Trains a Random Forest ensemble of n trees, calculates feature
+        importance, and returns the probability of sampling a feature, based
+        on its total relative relevance.
+
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Training dataset, pandas dataframe with the shape:
+            (n_samples, n_features)
+
+        y : pd.Series
+            Class/Target vector
+
+        n : int
+            Number of trees
+
+        Returns
+        -------
+        probs : numpy.ndarray
+         - Probabily of sampling feature based on their relevance
+        '''
+        print(
+            "Initializing the probability of a feature being selected as " +
+            "an initial feature, based on the feature's importance in a " +
+            f"random forest ensemble of {n} trees ..."
+        )
+        if self.pType == "regression":
+            rf = RandomForestRegressor(
+                n_estimators=n, n_jobs=-1, random_state=42
+            )
+        elif self.pType == "classification":
+            rf = RandomForestClassifier(
+                n_estimators=n, n_jobs=-1, random_state=42
+            )
+        else:
+            raise ValueError("'pType' must be 'regression' or 'classification'")
+
+        rf.fit(X, y)
+
+        # Get feature importance
+        # > scikit-learn's feature_importances_ sum to 1.0 by default
+        probs = rf.feature_importances_
+
+        return probs

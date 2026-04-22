@@ -300,7 +300,7 @@ class LTFMSelector:
     def fit(
             self, X, y, n=10000, loss_function='mse', sample_weight=None,
             agent_neuralnetwork=None, lr=1e-5, monitor=False,
-            log_actions=False, background_dataset=None, **kwargs
+            log_actions=False, log_dir=None, background_dataset=None, **kwargs
     ):
         '''
         Initializes the environment and agent, then trains the agent to select
@@ -363,6 +363,9 @@ class LTFMSelector:
             Because not every episode has the length defined in
             `self.max_timesteps`, remaining time-steps not "filled" will
             assume values of -2.
+
+        log_dir : str or None
+            Directory to store all logged metrics if `monitor=True`.
         '''
         ### Special-tailored implementation ###
         if "smsproject" in list(kwargs.keys()):
@@ -399,7 +402,7 @@ class LTFMSelector:
 
         # If user wants to monitor progression of terms in the loss function
         if monitor:
-            writer = SummaryWriter()
+            writer = SummaryWriter(log_dir=log_dir)
             monitor_count = 1
 
         # If user wants to log actions

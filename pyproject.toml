@@ -1,6 +1,6 @@
 [project]
 name = "ltfmselector"
-version = "0.3.0"
+version = "1.0.0"
 description = "Locally-Tailored Feature and Model Selector with Deep Q-Learning"
 readme = "README.md"
 authors = [
@@ -8,18 +8,14 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "gym>=0.26.2",
-    "gymnasium>=1.1.1",
     "matplotlib>=3.10.1",
-    "moviepy>=2.2.1",
     "numpy<2.0",
     "openpyxl>=3.1.5",
     "pandas>=2.2.3",
-    "pygame>=2.6.1",
     "scikit-learn<1.6",
-    "seaborn>=0.13.2",
     "tensorboard>=2.20.0",
     "torch>=2.6.0",
+    "tqdm>=4.67.3",
 ]
 license = {file = "LICENSE"}
 

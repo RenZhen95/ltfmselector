@@ -6,6 +6,7 @@ from torch.utils.tensorboard import SummaryWriter
 import os, sys
 import random
 import pickle
+import shutil
 import tarfile
 import numpy as np
 import pandas as pd
@@ -46,13 +47,11 @@ def load_model(filename, default_policy_net=True):
     pModels : list(tuple)
         List of prediction models provided by user during training
     '''
-    with tarfile.open(filename, 'r:gz') as tar:
+    with tarfile.open(filename, 'r') as tar:
         with tar.extractfile('selector.pkl_ltfmselector') as f:
             selector = pickle.load(f)
-
         with tar.extractfile('pModels.pkl_list') as f:
             pModels = pickle.load(f)
-
         with tar.extractfile('policy_network_checkpoints.pkl_dict') as f:
             policy_network_dict = pickle.load(f)
 
@@ -412,7 +411,7 @@ class LTFMSelector:
         self.y_pred_bg = self.get_bgPrediction(**kwargs)
 
         # Initialize probability of each feature sampled as the initial feature
-        InitialFeatureP = self.get_probInitialFeature(self.X, self.y, n)
+        self.InitialFeatureP = self.get_probInitialFeature(self.X, self.y, n)
 
         # Initializing the environments in parallel
         envs = [
@@ -422,7 +421,7 @@ class LTFMSelector:
                 self.fThreshold, self.fCap, self.fRate,
                 self.mQueryCost,
                 self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
-                self.pType, InitialFeatureP,
+                self.pType, self.InitialFeatureP,
                 self.regression_tol, self.regression_error_rounding,
                 self.pModels, self.device, sample_weight=self.sample_weight, **kwargs
             ) for i in tqdm(range(self.episodes), desc=f"Creating {self.episodes} environments")
@@ -437,7 +436,7 @@ class LTFMSelector:
             self.fThreshold, self.fCap, self.fRate,
             self.mQueryCost,
             self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
-            self.pType, InitialFeatureP,
+            self.pType, self.InitialFeatureP,
             self.regression_tol, self.regression_error_rounding,
             self.pModels, self.device, sample_weight=self.sample_weight
         ); _intenv.reset()
@@ -616,7 +615,7 @@ class LTFMSelector:
                 self.fThreshold, self.fCap, self.fRate,
                 self.mQueryCost,
                 self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
-                self.pType, InitialFeatureP,
+                self.pType, self.InitialFeatureP,
                 self.regression_tol, self.regression_error_rounding,
                 self.pModels, self.device, sample_weight=self.sample_weight, **kwargs
             ) for i in tqdm(
@@ -899,7 +898,6 @@ class LTFMSelector:
         # 2. Save the prediction models
         with open('pModels.pkl_list', 'wb') as f:
             pModels_to_save = []
-
             for model in self.pModels:
                 if isinstance(model, nn.Module):
                     pModels_to_save.append("pytorch", model.state_dict())
@@ -915,14 +913,16 @@ class LTFMSelector:
             pickle.dump(self.policy_network_checkpoints, f)
 
         # 4. Save all in a tarball
-        with tarfile.open(f"{filename}.tar.gz", 'w:gz') as tar:
+        with tarfile.open(f"{filename}.tar", 'w') as tar:
             tar.add('selector.pkl_ltfmselector')
             tar.add('pModels.pkl_list')
             tar.add('policy_network_checkpoints.pkl_dict')
 
-        os.remove('selector.pkl_ltfmselector')
-        os.remove('pModels.pkl_list')
-        os.remove('policy_network_checkpoints.pkl_dict')
+        # Only delete if the archive actually exists and has size
+        if os.path.getsize(f"{filename}.tar") > 0:
+            os.remove('selector.pkl_ltfmselector')
+            os.remove('pModels.pkl_list')
+            os.remove('policy_network_checkpoints.pkl_dict')
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -930,6 +930,7 @@ class LTFMSelector:
         del state["pModels"]
         del state["policy_net"]
         del state["target_net"]
+        del state["ReplayMemory"]
         return state
 
     def __setstate__(self, state):

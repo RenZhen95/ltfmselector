@@ -20,6 +20,7 @@ runs*
 predictionModels.py
 stdutils
 examples/train.py
+examples/test.py
 RBRHX_ModalScores.xlsx
 
 # LaTeX

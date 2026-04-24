@@ -239,10 +239,10 @@ class LTFMSelector:
         self.policy_network_checkpoints = dict()
 
         if not checkpoint_interval is None:
-            if checkpoint_interval > max_timesteps:
+            if checkpoint_interval > episodes:
                 raise ValueError(
                     "Invalid value for 'checkpoint_interval', it must be " +
-                    "less than 'max_timesteps'!"
+                    "less than 'episodes'!"
                 )
 
         if not pType in ["regression", "classification"]:

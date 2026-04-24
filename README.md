@@ -1,11 +1,4 @@
-﻿<h1>
-  <picture>
-    <img alt="LTFMSelectorLogo" src="icons/icon.png" width="550px">
-  </picture>
-</h1>
-
-# LTFMSelector
-Locally-Tailored Feature and Model Selector with Deep Q-Learning
+# LTFMSelector: Locally-Tailored Dynamic Feature and Model Selector with Deep Reinforcement Learning
 
 ## Installation
 ```

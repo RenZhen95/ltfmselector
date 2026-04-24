@@ -28,7 +28,7 @@ from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 capUpperValues = lambda x: 3.0 if x > 3.0 else x
 capLowerValues = lambda x: 0.0 if x < 0.0 else x
 
-def load_model(filename, default_policy_net=True):
+def load_model(filename, default_policy_net=True, nEpisodes=None):
     '''
     Load a previously saved model. The list of prediction models will be
     returned. User should manually load it, see example. This design
@@ -41,6 +41,11 @@ def load_model(filename, default_policy_net=True):
 
     default_policy_net : bool
         If True, user used the default policy network during training
+
+    nEpisodes : int or None
+        If None, the policy network that has been trained on all initialized
+        environments will be used or else the user-specified policy network
+        that was saved intermediately
 
     Returns
     -------
@@ -57,15 +62,23 @@ def load_model(filename, default_policy_net=True):
 
     # Load policy network
     if default_policy_net:
+        if nEpisodes is None:
+            nE = selector.episodes
+        else:
+            # Extract intermediately saved intervals
+            nEOptions = list(policy_network_dict.keys())
+            nEOptions = [i for i in nEOptions if isinstance(i, int)]
+            if not nEpisodes in nEOptions:
+                raise ValueError(f"Available options of nEpisodes: {nEOptions}")
+            else:
+                nE = nEpisodes
+
         policy_network = DQN(
             selector.state_length, selector.actions_length,
-            policy_network_dict["n1"],
-            policy_network_dict["n2"]
+            policy_network_dict["n1"], policy_network_dict["n2"]
         )
-        print(policy_network_dict.keys())
-        policy_network.load_state_dict(
-            policy_network_dict[selector.episodes]
-        )
+        policy_network.load_state_dict(policy_network_dict[nE])
+
     selector.policy_net = policy_network
 
     # Set pModels to None to ENSURE that user, manually sets the prediction
@@ -402,7 +415,7 @@ class LTFMSelector:
 
         # If user wants to monitor progression of terms in the loss function
         if monitor:
-            writer = SummaryWriter(log_dir=log_dir)
+            writer = SummaryWriter(log_dir=f'runs/{log_dir}')
             monitor_count = 1
 
         # If user wants to log actions
@@ -485,6 +498,9 @@ class LTFMSelector:
         states = torch.tensor(states, dtype=torch.float32, device=self.device)
         # >> Tensor(nEpisodes, |State|)
 
+        # Counter of number of environments done
+        nEnvDone = 0
+
         for t in count():
             actions = self.select_action(states, envs)
             # >> Tensor(nEpisodes, 1) - Action selected for each environment
@@ -542,6 +558,13 @@ class LTFMSelector:
                     nextStates_onGoing.append(sp)
                 else:
                     envIdxToRemove.append(i)
+                    nEnvDone += 1
+
+                    # Saving trained policy network intermediately
+                    if not self.checkpoint_interval is None:
+                        if (nEnvDone) % self.checkpoint_interval == 0:
+                            self.policy_network_checkpoints[nEnvDone] =\
+                                self.policy_net.state_dict()
 
             for i in reversed(envIdxToRemove):
                 del envs[i]
@@ -575,12 +598,6 @@ class LTFMSelector:
                     targetParameters[key]*(1 - self.tau)
 
             self.target_net.load_state_dict(targetParameters)
-
-            # Saving trained policy network intermediately
-            if not self.checkpoint_interval is None:
-                if (i_episode + 1) % self.checkpoint_interval == 0:
-                    self.policy_network_checkpoints[i_episode + 1] =\
-                        self.policy_net.state_dict()
 
         # Save trained weights after all episodes
         self.policy_network_checkpoints[self.episodes] = self.policy_net.state_dict()

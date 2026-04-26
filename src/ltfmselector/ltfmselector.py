@@ -89,7 +89,8 @@ def load_model(filename, default_policy_net=True, nEpisodes=None):
 
 class LTFMSelector:
     def __init__(
-            self, episodes, batch_size=512, epochs=10, tau=0.0005,
+            self, episodes, buffer_size=10000, batch_size=512,
+            epochs=10, tau=0.0005,
             eps_start=0.9, eps_end=0.05, eps_decay=1000,
             fQueryCost=0.01, fQueryFunction=None,
             fThreshold=None, fCap=None, fRate=None,
@@ -109,6 +110,9 @@ class LTFMSelector:
         ----------
         episodes : int
             Number of episodes agent is trained
+
+        buffer_size : int (default: 10000)
+            Number of transitions to store in the replay memory
 
         batch_size : int
             Batch size to train the policy network with
@@ -305,7 +309,11 @@ class LTFMSelector:
             self.pModels = pModels
 
         # Initializing the ReplayMemory
-        self.ReplayMemory = ReplayMemory(50000)
+        print(
+            "Initializing the replay buffer to store the last " +
+            f"{buffer_size} transitions ... "
+        )
+        self.ReplayMemory = ReplayMemory(buffer_size)
 
         # Initialize counter to track total actions already taken
         self.total_actions = 0
@@ -502,7 +510,7 @@ class LTFMSelector:
         nEnvDone = 0
 
         for t in count():
-            actions = self.select_action(states, envs)
+            actions = self.select_action(states, envs, train=True)
             # >> Tensor(nEpisodes, 1) - Action selected for each environment
 
             # Log actions if desired
@@ -664,7 +672,7 @@ class LTFMSelector:
         states = torch.tensor(states, dtype=torch.float32, device=self.device)
 
         for t in count():
-            actions = self.select_action(states, envs)
+            actions = self.select_action(states, envs, train=False)
 
             if t+1 == self.max_timesteps:
                 actions = torch.tensor(
@@ -725,7 +733,7 @@ class LTFMSelector:
 
         return y_pred
 
-    def select_action(self, states, envs):
+    def select_action(self, states, envs, train=True):
         '''
         Select an action based on the given states. For exploration an
         epsilon-greedy strategy is implemented - the agent will for an
@@ -736,13 +744,22 @@ class LTFMSelector:
         ----------
         states : torch.Tensor
             State of environments generated in parallel
+
+        envs : torch.Tensor
+            Environments agent interacts with
+
+        train : bool
+            If `true` employ epsilon-greedy strategy
         '''
         # Probability of choosing random actions, instead of best action
         # - Probability decreases exponentially over time
-        eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
-            np.exp(-1. * self.total_actions / self.eps_decay)
-
-        self.total_actions += 1
+        if train:
+            eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
+                np.exp(-1. * self.total_actions / self.eps_decay)
+            
+            self.total_actions += 1
+        else:
+            eps_threshold = -1
 
         # Perform random action
         if eps_threshold > random.random():

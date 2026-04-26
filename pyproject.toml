@@ -1,6 +1,6 @@
 [project]
 name = "ltfmselector"
-version = "1.0.3"
+version = "1.0.4"
 description = "Locally-Tailored Feature and Model Selector with Deep Q-Learning"
 readme = "README.md"
 authors = [

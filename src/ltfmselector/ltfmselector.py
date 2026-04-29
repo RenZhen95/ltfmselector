@@ -1,3 +1,4 @@
+import shap
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -11,10 +12,12 @@ import tarfile
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 from collections import defaultdict
 from joblib import Parallel, delayed
 
 from .env import Environment
+from .utils import rename_features
 from .utils import ReplayMemory, DQN, Transition, balance_classDistribution_patient
 
 from itertools import count
@@ -23,6 +26,8 @@ from sklearn.svm import SVR, SVC
 from sklearn.linear_model import Ridge
 from sklearn.naive_bayes import GaussianNB
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+
+from sklearn.model_selection._search import BaseSearchCV
 
 # Functions to clip predicted regression values
 capUpperValues = lambda x: 3.0 if x > 3.0 else x
@@ -756,7 +761,7 @@ class LTFMSelector:
         if train:
             eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
                 np.exp(-1. * self.total_actions / self.eps_decay)
-            
+
             self.total_actions += 1
         else:
             eps_threshold = -1
@@ -1040,3 +1045,122 @@ class LTFMSelector:
         probs = rf.feature_importances_
 
         return probs
+
+    def explain_wSHAP(
+            self, test_id, test_pkldict, X_test, bgDataset=None, plot=False,
+            max_display=4, features_names=None
+    ):
+        '''
+        Explains the prediction model of the given test sample.
+
+        Parameters
+        ----------
+        test_id : int or str
+            The ID (index) of the prediction to explain
+
+        test_pkldict : Python pickle
+            The output Python pickled binary file from running predict
+
+        X_test : pd.DataFrame
+            Test samples
+
+        bgDataset : pd.DataFrame or None
+            "Background dataset" for conditioning out on feature values when
+            deriving SHAP values
+
+        plot : bool
+            Plot waterfall diagram
+
+        max_display : int
+            Maximum number of features displayed in waterfall plot if
+            `plot=True`
+
+        features_names : list or None
+            Feature names for waterfall plot
+
+        Returns
+        -------
+        explanations : shap._explanation.Explanation
+            Feature attribution values
+
+        fig : matplotlib.figure.Figure
+            Only if `plot=True`
+
+        ax : matplotlib.axes._axes.Axes
+            Only if `plot=True`
+        '''
+        # Load metainformation from earlier prediction
+        with open(test_pkldict, 'rb') as handle:
+            testDict = pickle.load(handle)
+
+        # Get PM and features used by agent when making a prediction for
+        # given sample
+        test_idDict = testDict[test_id]
+
+        pModel = self.pModels[test_idDict["PredModel"]][1]
+        featuresMask = test_idDict["Mask"]
+
+        # Get trimmed datasets
+        trimmedTrainDF = self.X.iloc[:, np.where(featuresMask==1.)[0].tolist()]
+        trimmedTestDF  = X_test.iloc[:, np.where(featuresMask==1.)[0].tolist()]
+
+        if bgDataset is None:
+            bgDataset = shap.maskers.Independent(self.X)
+
+        trimmedbgDataset = bgDataset.iloc[:, np.where(featuresMask==1.)[0].tolist()]
+
+        # Retrain PM
+        # Force to run on 1 thread to avoid 'bugs'
+        if hasattr(pModel, 'n_jobs'):
+            pModel.n_jobs = 1
+
+        if self.smsproject:
+            _X_train_wLabel = trimmedTrainDF.copy()
+            _X_train_wLabel["Target"] = self.y.loc[_X_train_wLabel.index]
+
+            _weights = balance_classDistribution_patient(
+                _X_train_wLabel, "Target"
+            ).to_numpy(dtype=np.float32)[:,0]
+        else:
+            _weights = self.sample_weight
+
+        pModel.fit(trimmedTrainDF, self.y, sample_weight=_weights)
+
+        # Get sample
+        testX = (trimmedTestDF.loc[test_id].values).reshape(1, trimmedTestDF.shape[1])
+
+        # Initializing a SHAP explanation model
+
+        # First handle scikit model selectors
+        if isinstance(pModel, BaseSearchCV):
+            # Get best estimator
+            pModel = pModel.best_estimator_
+
+        max_evals = (50 * trimmedbgDataset.shape[1]*2) + 50
+
+        if self.smsproject:
+            features_names = [
+                rename_features(col) for col in list(trimmedTestDF.columns)
+            ]
+        else:
+            features_names = features_names
+
+        explainer = shap.Explainer(
+            pModel.predict,
+            masker=trimmedbgDataset,
+            algorithm="permutation",
+            max_evals=max_evals, seed=0,
+            feature_names=features_names
+        )
+        explanations = explainer(testX, max_evals=max_evals)
+
+        # Plot waterfall
+        if plot:
+            fig, ax = plt.subplots(1, 1)
+            wfplot = shap.plots.waterfall(
+                explanations[0], show=False, max_display=max_display
+            )
+            fig.tight_layout()
+            return explanations, fig, ax
+        else:
+            return explanations

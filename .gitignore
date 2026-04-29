@@ -21,6 +21,7 @@ predictionModels.py
 stdutils
 examples/train.py
 examples/test.py
+examples/tempResults
 RBRHX_ModalScores.xlsx
 
 # LaTeX

@@ -1,17 +1,32 @@
+import shap
 import pickle
 import os, sys
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from matplotlib import rc
+import matplotlib.pyplot as plt
+plt.rcParams['font.serif'] = ['CMU Serif']
+plt.rcParams['font.family'] = 'serif'
+# plt.rcParams['font.weight'] = 'bold'
+plt.rcParams['mathtext.fontset'] = 'cm'
+plt.rcParams['text.latex.preamble'] = r'\usepackage{amsmath}'
+plt.rcParams['font.size'] = 10
 
 from ltfmselector import load_model
 
-# Example patient: RB_00103_B_10_A02_U02
+from sklearn.model_selection._search import BaseSearchCV
+
+# From SMS Paper
+# sample_forpaper = "ES086-B-3Gang01_A01_U01"  # light
+# sample_forpaper = "ES180-BG-3Gang05_A01_U01" # moderate
+# sample_forpaper = "RB_00055_B_03_A01_U01"    # moderate
+# sample_forpaper = "RB_00100_BG_09_A02_U02"   # significant
 
 if len(sys.argv) < 6:
     print(
         "Possible usage: python3.11 readresults.py <modelPath> " +
-        "<testDictPkl> <testDataset> <spID> <repGCPkl>"
+        "<testDictPkl> <testDataset> <spID> <bgDataset>"
     )
     sys.exit(1)
 else:
@@ -19,71 +34,18 @@ else:
     testpkl = Path(sys.argv[2])
     testDataset = Path(sys.argv[3])
     spID = sys.argv[4]
+    bgDataset = Path(sys.argv[5])
 
-    repGCPkl = Path(sys.argv[5])
-
-# # Load trained agent
-# Selector, pModels = load_model(modelPath, nEpisodes=None)
-# dataset = Selector.X
-
-# # First initialize background dataset for SHAP
-# # 1. Extracting the representative samples for each SMS-subscore group
-# with open(repGCPkl, "rb") as handle:
-#     repGCDict = pickle.load(handle)
-
-# # 2. Get 90 samples with a similar subscore distribution during training
-# nTotalSamples = 90
-# nSubscore0 = round((repGCDict[0].shape[0]/dataset.shape[0])*nTotalSamples)
-# nSubscore1 = round((repGCDict[1].shape[0]/dataset.shape[0])*nTotalSamples)
-# nSubscore2 = round((repGCDict[2].shape[0]/dataset.shape[0])*nTotalSamples)
-# nSubscore3 = round((repGCDict[3].shape[0]/dataset.shape[0])*nTotalSamples)
-# nSubscore = np.array((nSubscore0, nSubscore1, nSubscore2, nSubscore3))
-
-# if nSubscore.sum() < nTotalSamples:
-#     nSubscore[np.argmin(nSubscore)] = nSubscore[np.argmin(nSubscore)] + (nTotalSamples - nSubscore.sum())
-# elif nSubscore.sum() > nTotalSamples:
-#     nSubscore[np.argmax(nSubscore)] = nSubscore[np.argmax(nSubscore)] - (nSubscore.sum() - nTotalSamples)
-
-# # Sampling 90 samples as background dataset for masking (averaged out)
-# samples0 = repGCDict[0].iloc[0:nSubscore[0]]
-# samples1 = repGCDict[1].iloc[0:nSubscore[1]]
-# samples2 = repGCDict[2].iloc[0:nSubscore[2]]
-# samples3 = repGCDict[3].iloc[0:nSubscore[3]]
-# samplesMasking = list(samples0.index) + list(samples1.index) + list(samples2.index) + list(samples3.index)
-
-# datasetMask = dataset.loc[samplesMasking, :]
-# datasetMask.to_csv("StabilityBG_repGC_n90.dat", sep=' ')
-
-# sys.exit()
-
-# ================================================
-# This should all be implemented into ltfmselector
-# ================================================
-# Load trained agent
 Selector, pModels = load_model(modelPath, nEpisodes=None)
-trainDF = Selector.X
+models = []
+for _m in pModels:
+    models.append(_m[1])
+Selector.pModels = pModels
 
-# Load test dataset
-with open(testpkl, 'rb') as handle:
-    testDict = pickle.load(handle)
-
-# Get prediction to explain
-spDict = testDict[spID]
-
-# Get PM used
-pModel = pModels[spDict["PredModel"]][1]
-print(f"Prediction model : {pModel}")
-
-# Get features used
-featuresMask = spDict["Mask"]
-print(f"Features mask    :\n{featuresMask}")
-
+bgDataset = pd.read_table(bgDataset, sep=' ', index_col=0)
 testDF = pd.read_table(testDataset, sep=' ', index_col=0)
 
-# Get trimmed datasets
-trimmedTraintDF = trainDF.iloc[:, np.where(featuresMask==1.)[0].tolist()]
-print(trimmedTraintDF)
-trimmedTestDF = testDF.iloc[:, np.where(featuresMask==1.)[0].tolist()]
-print(trimmedTestDF)
+_ = Selector.explain_wSHAP(spID, testpkl, testDF, bgDataset, plot=True)
+plt.show()
 
 sys.exit(0)

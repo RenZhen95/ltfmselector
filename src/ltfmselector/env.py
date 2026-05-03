@@ -1,3 +1,4 @@
+import sys
 import random
 import numpy as np
 import pandas as pd
@@ -13,7 +14,6 @@ class Environment:
             self, X, y, X_bg, y_pred_bg,
             fQueryCost, fQueryFunction,
             fThreshold, fCap, fRate,
-            mQueryCost,
             fRepeatQueryCost, p_wNoFCost, errorCost, pType, iniFP,
             regression_tol, regression_error_rounding, pModels, device,
             sample_weight=None, **kwargs
@@ -60,14 +60,11 @@ class Environment:
             If `fQueryFunction == {'linear', 'quadratic', 'exponential'}`, rate
             individual cost functions
 
-        mQueryCost : float
-            Cost of querying a prediction model
-
         fRepeatQueryCost : float
             Cost of querying a feature already previously selected
 
         p_wNoFCost : float
-            Cost of switching selected prediction model
+            Cost of making a prediction without any recruited features
 
         errorCost : float
             Cost of making a wrong prediction
@@ -114,7 +111,6 @@ class Environment:
         self.fCap = fCap
         self.fRate = fRate
 
-        self.mQueryCost = mQueryCost
         self.fRepeatQueryCost = fRepeatQueryCost
         self.p_wNoFCost = p_wNoFCost
         self.errorCost = errorCost
@@ -136,14 +132,10 @@ class Environment:
         self.p_InitialF = iniFP
 
         # Agent's actions
-        #  - Include option of selecting prediction
-        if len(self.pModels) > 1:
-            self.actions = np.arange(-1, self.nFeatures + len(self.pModels))
-        else:
-            self.actions = np.arange(-1, self.nFeatures)
+        self.actions = np.arange(self.nFeatures + len(self.pModels))
 
-        # Counter for prediction model change
-        self.pm_nChange = 0
+        # Function to check if passed action index is valid
+        self.isActionValid = lambda x: True if 0 <= x < len(self.actions) else False
 
         ### Special-tailored implementation ###
         if "smsproject" in list(kwargs.keys()):
@@ -165,12 +157,6 @@ class Environment:
         if sample is None:
             # Random sample from X
             i = random.randint(0, self.nSamples - 1)
-
-        # Reset actions list
-        if len(self.pModels) > 1:
-            self.actions = np.arange(-1, self.nFeatures + len(self.pModels))
-        else:
-            self.actions = np.arange(-1, self.nFeatures)
 
         # Reset regressor result
         self.y_pred = None
@@ -194,21 +180,11 @@ class Environment:
             self.y_test = None # indicating this is a test sample to predict
 
         # Formulating the state (partially observable MDP)
-        if len(self.pModels) > 1:
-            self.state = np.concatenate(
-                (
-                    self.X_avg.to_numpy().reshape(-1),
-                    np.zeros(self.nFeatures),
-                    [random.randint(0, len(self.pModels)-1)]
-                )
+        self.state = np.concatenate(
+            (
+                self.X_avg.to_numpy().reshape(-1), np.zeros(self.nFeatures)
             )
-        else:
-            self.state = np.concatenate(
-                (
-                    self.X_avg.to_numpy().reshape(-1),
-                    np.zeros(self.nFeatures)
-                )
-            )
+        )
 
         # Sample initial feature
         inif = self.sample_initialFeature()
@@ -216,9 +192,6 @@ class Environment:
         # Update the state
         self.state[inif] = self.X_test.iloc[0, inif]
         self.state[self.nFeatures + inif] = 1
-
-        # Counter for prediction model change
-        self.pm_nChange = 0
 
         return self.state
 
@@ -229,14 +202,22 @@ class Environment:
         Parameters
         ----------
         action : int
-            = -1 (make a prediction with selected features and prediction model)
-            = int : [0, n_features] (query a feature)
-            = int : [n_features, n_features + n_model] (query a prediction model)
+            = int : [0, n_features]
+                    (query a feature)
+            = int : [n_features, n_features + n_model]
+                    (use PM to make prediction)
         '''
-        # === === === ===
-        # Query a feature
-        if ((action > -1) & (action < self.nFeatures)):
-            # If feature has NOT been selected, select that feature
+        # Sanity check
+        if not self.isActionValid(action):
+            raise TypeError(
+                f"Action {action} is not valid. Actions must lie between 0 " +
+                f"and {len(self.actions)-1}"
+            )
+
+        # QUERY FEATURE
+        if action < self.nFeatures:
+
+            # If feature has not yet been selected
             if self.state[self.nFeatures + action] == 0:
 
                 # 1. Set mask value to 1
@@ -253,17 +234,13 @@ class Environment:
             else:
                 return [self.state, -self.fRepeatQueryCost, False]
 
-        # === === === ===
-        # Changing prediction model in the state
-        elif (action >= self.nFeatures):
-            # This returns the index/option of prediction model
-            self.state[-1] = action - self.nFeatures
-
-            self.pm_nChange += 1
-
-            return [self.state, -self.mQueryCost, False]
-
+        # MAKE PREDICTION
         else:
+
+            # Get selected prediction model
+            self.PM = action - self.nFeatures
+            selected_predModel = self.pModels[self.PM]
+
             # Retain only features selected by agent
             X_train = self.X_train.copy()
             y_train = self.y_train.copy()
@@ -289,12 +266,6 @@ class Environment:
             X_train = X_train[col_to_retain]
             X_test  = X_test[col_to_retain]
 
-            # Get selected prediction model
-            if len(self.pModels) > 1:
-                selected_predModel = self.pModels[int(self.state[-1])]
-            else:
-                selected_predModel = self.pModels[0]
-
             ### Special-tailored implementation ###
             if self.smsproject:
                 X_train_wLabel = X_train.copy()
@@ -317,12 +288,8 @@ class Environment:
             if isinstance(X_test, pd.DataFrame):
                 X_test = X_test.values
 
-            if _weights is None:
-                selected_predModel.fit(X_train, y_train)
-            else:
-                selected_predModel.fit(
-                    X_train, y_train, sample_weight=_weights
-                )
+            # Fit PM
+            selected_predModel.fit(X_train, y_train, sample_weight=_weights)
 
             # Use PM to make a prediction
             self.y_pred = selected_predModel.predict(X_test)[0]
@@ -349,12 +316,10 @@ class Environment:
                     else:
                         penalty = -self.errorCost
 
-                # print(f"True Output: {self.y_test} | Prediction: {self.y_pred}\n")
                 return [None, penalty, True]
 
             # Test
             else:
-                # print(f"Prediction: {self.y_pred}\n")
                 return [None, 0.0, True]
 
     def get_fQueryCost(self):
@@ -417,12 +382,6 @@ class Environment:
         Select a random action
         '''
         return random.choice(self.actions)
-
-    def get_prediction_model(self):
-        '''
-        Get the selected prediction model and returns its index
-        '''
-        return int(self.state[-1])
 
     def __getstate__(self):
         state = self.__dict__.copy()

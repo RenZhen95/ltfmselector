@@ -96,10 +96,9 @@ class LTFMSelector:
     def __init__(
             self, episodes, buffer_size=10000, batch_size=512,
             epochs=10, tau=0.0005,
-            eps_start=0.9, eps_end=0.05, eps_decay=1000,
+            eps_start=0.9, eps_end=0.05, eps_decay=125,
             fQueryCost=0.01, fQueryFunction=None,
             fThreshold=None, fCap=None, fRate=None,
-            mQueryCost=0.01,
             fRepeatQueryCost=1.0, p_wNoFCost=5.0, errorCost=1.0,
             pType="regression", regression_tol=0.5,
             regression_error_rounding=1,
@@ -167,14 +166,11 @@ class LTFMSelector:
             If `fQueryFunction == {'linear', 'quadratic'}`, rate of
             individual cost functions
 
-        mQueryCost : float
-            Cost of querying a prediction model
-
         fRepeatQueryCost : float
             Cost of querying a feature already previously selected
 
         p_wNoFCost : float
-            Cost of switching selected prediction model
+            Cost of making a prediction without any recruited features
 
         errorCost : float
             Cost of making a wrong prediction
@@ -290,7 +286,6 @@ class LTFMSelector:
                         else:
                             self.fRate = float(fRate)
 
-        self.mQueryCost = mQueryCost
         self.fRepeatQueryCost = fRepeatQueryCost
         self.p_wNoFCost = p_wNoFCost
         self.errorCost = errorCost
@@ -311,7 +306,10 @@ class LTFMSelector:
                 GaussianNB()
             ]
         else:
-            self.pModels = pModels
+            if isinstance(pModels, list):
+                self.pModels = pModels
+            else:
+                raise ValueError("`pModels` must be type `list`")
 
         # Initializing the ReplayMemory
         print(
@@ -448,7 +446,6 @@ class LTFMSelector:
                 self.X, self.y, self.background_dataset, self.y_pred_bg,
                 self.fQueryCost, self.fQueryFunction,
                 self.fThreshold, self.fCap, self.fRate,
-                self.mQueryCost,
                 self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
                 self.pType, self.InitialFeatureP,
                 self.regression_tol, self.regression_error_rounding,
@@ -463,7 +460,6 @@ class LTFMSelector:
             self.X, self.y, self.background_dataset, self.y_pred_bg,
             self.fQueryCost, self.fQueryFunction,
             self.fThreshold, self.fCap, self.fRate,
-            self.mQueryCost,
             self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
             self.pType, self.InitialFeatureP,
             self.regression_tol, self.regression_error_rounding,
@@ -505,10 +501,10 @@ class LTFMSelector:
             self.max_timesteps = _intenv.nFeatures * 3
 
         # Reset all environments
-        states = np.array(Parallel(n_jobs=-1, prefer="threads")(
-            delayed(env.reset)() for env in envs
-        ))
-        states = torch.tensor(states, dtype=torch.float32, device=self.device)
+        states = torch.tensor(
+            np.array([env.reset() for env in envs]),
+            dtype=torch.float32, device=self.device
+        )
         # >> Tensor(nEpisodes, |State|)
 
         # Counter of number of environments done
@@ -522,11 +518,10 @@ class LTFMSelector:
             if log_actions:
                 self.ActionsLog[IDX, t] = actions.squeeze(1).numpy()
 
-            # If maximum time_steps is reached
+            # If maximum time_steps is reached, pick a prediction action based
+            # on the one with highest Q-value
             if t+1 == self.max_timesteps:
-                actions = torch.tensor(
-                    [-1 for e in range(len(envs))], device=self.device
-                ).view(len(envs), 1)
+                actions = self.select_PM(states, envs)
 
             # Agent carries out action in each environment and returns:
             # - Observations :: list(nEpisodes)
@@ -544,23 +539,25 @@ class LTFMSelector:
             ).view(len(envs), 1)
             terminations = list(terminations)
 
+            # Get next states
+            # - None if the next state is a termination state
+            # - Otherwise, simply the next state according to the transition function
             get_nextState = lambda x, o: None if x else torch.tensor(
                 o, dtype=torch.float32, device=self.device
             ).unsqueeze(0)
-
-            nextStates = Parallel(n_jobs=-1, prefer="threads")(
-                delayed(get_nextState)(t, o) for t, o in zip(terminations, observations)
-            )
+            nextStates = [
+                get_nextState(t, o) for t, o in zip(terminations, observations)
+            ]
 
             # Push to replay buffer
-            Parallel(n_jobs=-1, prefer="threads")(
-                delayed(self.ReplayMemory.push)(
-                    s.unsqueeze(0), a.unsqueeze(0), sp, r
-                ) for s, a, sp, r in zip(
-                    torch.unbind(states, dim=0), torch.unbind(actions, dim=0),
-                    nextStates, rewards
-                )
-            )
+            for s, a, sp, r in zip(
+                    torch.unbind(states, dim=0),
+                    torch.unbind(actions, dim=0),
+                    nextStates,
+                    rewards
+            ):
+                self.ReplayMemory.push(s.unsqueeze(0), a.unsqueeze(0), sp, r)
+
 
             # Update next state
             # - Kick out environments that have ended from `envs` and `states`
@@ -646,7 +643,6 @@ class LTFMSelector:
                 self.X, self.y, self.background_dataset, self.y_pred_bg,
                 self.fQueryCost, self.fQueryFunction,
                 self.fThreshold, self.fCap, self.fRate,
-                self.mQueryCost,
                 self.fRepeatQueryCost, self.p_wNoFCost, self.errorCost,
                 self.pType, self.InitialFeatureP,
                 self.regression_tol, self.regression_error_rounding,
@@ -669,20 +665,16 @@ class LTFMSelector:
         y_pred = pd.Series(np.zeros(X_test.shape[0]), index=X_test.index)
 
         # Reset all environments
-        states = np.array(Parallel(n_jobs=-1, prefer="threads")(
-            delayed(env.reset)(
-                sample=X_test.iloc[[i]]
-            ) for i, env in enumerate(envs)
-        ))
-        states = torch.tensor(states, dtype=torch.float32, device=self.device)
+        states = torch.tensor(
+            np.array([env.reset(sample=X_test.iloc[[i]]) for i, env in enumerate(envs)]),
+            dtype=torch.float32, device=self.device
+        )
 
         for t in count():
             actions = self.select_action(states, envs, train=False)
 
             if t+1 == self.max_timesteps:
-                actions = torch.tensor(
-                    [-1 for e in range(len(envs))], device=self.device
-                ).view(len(envs), 1)
+                actions = self.select_PM(states, envs)
 
             envTransition = []
             for envIdx, env in enumerate(tqdm(envs)):
@@ -698,10 +690,9 @@ class LTFMSelector:
             get_nextState = lambda x, o: None if x else torch.tensor(
                 o, dtype=torch.float32, device=self.device
             ).unsqueeze(0)
-
-            nextStates = Parallel(n_jobs=-1, prefer="threads")(
-                delayed(get_nextState)(t, o) for t, o in zip(terminations, observations)
-            )
+            nextStates = [
+                get_nextState(t, o) for t, o in zip(terminations, observations)
+            ]
 
             # Update next state
             # - Kick out environments that have ended from `envs` and `states`
@@ -717,10 +708,9 @@ class LTFMSelector:
                     if log:
                         doc_episode = {
                             "SampleID": IDX[i],
-                            "PredModel": envs[i].get_prediction_model(),
+                            "PredModel": envs[i].PM,
                             "Iterations": t+1,
-                            "Mask": envs[i].get_feature_mask(),
-                            "predModel_nChanges": envs[i].pm_nChange
+                            "Mask": envs[i].get_feature_mask()
                         }
                         self.doc_test[IDX[i]] = doc_episode
 
@@ -767,7 +757,9 @@ class LTFMSelector:
             eps_threshold = -1
 
         # Perform random action
+        print(f"Eps: {eps_threshold}")
         if eps_threshold > random.random():
+            print(f"Step {self.total_actions-1}:: Random")
             return torch.tensor(
                 [env.get_random_action() for env in envs],
                 device=self.device, dtype=torch.long
@@ -775,11 +767,27 @@ class LTFMSelector:
 
         # Perform maximizing action
         else:
+            print(f"Step {self.total_actions-1}:: Policy-based")
             with torch.no_grad():
                 QValues = self.policy_net(states)
-                # >> Tensor(nEpisodes, |Actions (Predict + #Features + #PM)|)
+                # >> Tensor(nEpisodes, |Actions (#Features + #PM)|)
+                return QValues.max(1)[1].view(states.shape[0], 1)
 
-                return (QValues.max(1)[1].view(states.shape[0], 1) - 1)
+    def select_PM(self, states, envs):
+        '''
+        Select PM with highest Q-value based on given states.
+
+        Parameters
+        ----------
+        states : torch.Tensor
+            State of environments generated in parallel
+
+        envs : torch.Tensor
+            Environments agent interacts with
+        '''
+        with torch.no_grad():
+            QValuesPM = self.policy_net(states)[:, -(len(self.pModels)):]
+            return QValuesPM.max(1)[1].view(states.shape[0], 1)
 
     def optimize_model(self, optimizer, loss_function, monitor):
         '''
@@ -852,10 +860,8 @@ class LTFMSelector:
         # Compute Q(s, a) of each sampled state-action pair from with the
         # policy network
         state_action_values = self.policy_net(state_batch).gather(
-            1, action_batch+1
+            1, action_batch
         ).float()
-        # action_batch+1 because the actions begin from [-1 0 1 2 ...],
-        # where -1 indicates the action of making a prediction.
 
         # Step 6 ---
         # Double Deep Q-Learning, where Q' denotes the target network, compute
@@ -872,8 +878,7 @@ class LTFMSelector:
         )
         with torch.no_grad():
             # Get maximizing action from policy_net, action space:
-            # [-1, 0, 1, 2, ..., D+1, D+2, ..., D+G]
-            # !! Do not confuse the action notation with the action index !!
+            # [0, 1, 2, ..., D+1, D+2, ..., D+G]
             maxActionsIdx = self.policy_net(
                 non_final_next_states
             ).max(1)[1].unsqueeze(-1)

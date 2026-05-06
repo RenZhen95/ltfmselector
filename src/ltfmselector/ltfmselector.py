@@ -33,7 +33,7 @@ from sklearn.model_selection._search import BaseSearchCV
 capUpperValues = lambda x: 3.0 if x > 3.0 else x
 capLowerValues = lambda x: 0.0 if x < 0.0 else x
 
-def load_model(filename, default_policy_net=True, nEpisodes=None):
+def load_model(filename, default_policy_net=True, nOptSteps=None):
     '''
     Load a previously saved model. The list of prediction models will be
     returned. User should manually load it, see example. This design
@@ -47,7 +47,7 @@ def load_model(filename, default_policy_net=True, nEpisodes=None):
     default_policy_net : bool
         If True, user used the default policy network during training
 
-    nEpisodes : int or None
+    nOptSteps : int or None
         If None, the policy network that has been trained on all initialized
         environments will be used or else the user-specified policy network
         that was saved intermediately
@@ -67,16 +67,16 @@ def load_model(filename, default_policy_net=True, nEpisodes=None):
 
     # Load policy network
     if default_policy_net:
-        if nEpisodes is None:
-            nE = selector.episodes
+        if nOptSteps is None:
+            nE = -1
         else:
             # Extract intermediately saved intervals
             nEOptions = list(policy_network_dict.keys())
             nEOptions = [i for i in nEOptions if isinstance(i, int)]
-            if not nEpisodes in nEOptions:
-                raise ValueError(f"Available options of nEpisodes: {nEOptions}")
+            if not nOptSteps in nEOptions:
+                raise ValueError(f"Available options of nOptSteps: {nEOptions}")
             else:
-                nE = nEpisodes
+                nE = nOptSteps
 
         policy_network = DQN(
             selector.state_length, selector.actions_length,
@@ -220,13 +220,13 @@ class LTFMSelector:
         max_timesteps : int or None
             Maximum number of time-steps per episode. Agent will be forced to
             make a prediction with the selected features and prediction model,
-            if max_timesteps is reached
+            if max_timesteps is reached.
 
             If None, max_timesteps will be set to 3 x number_of_features
 
         checkpoint_interval : int or None
-            Save the policy network after a defined interval of episodes as
-            checkpoints. Obviously cannot be more than ``episodes``
+            Save the policy network intermediately over a user-defined number
+            of optimization steps.
         '''
         self.device = device
 
@@ -242,13 +242,6 @@ class LTFMSelector:
         self.checkpoint_interval = checkpoint_interval
         self.policy_net = None
         self.policy_network_checkpoints = dict()
-
-        if not checkpoint_interval is None:
-            if checkpoint_interval > episodes:
-                raise ValueError(
-                    "Invalid value for 'checkpoint_interval', it must be " +
-                    "less than 'episodes'!"
-                )
 
         if not pType in ["regression", "classification"]:
             raise ValueError("Either 'regression' or 'classification' only!")
@@ -427,7 +420,6 @@ class LTFMSelector:
         # If user wants to monitor progression of terms in the loss function
         if monitor:
             writer = SummaryWriter(log_dir=f'runs/{log_dir}')
-            monitor_count = 1
 
         # If user wants to log actions
         if log_actions:
@@ -507,8 +499,11 @@ class LTFMSelector:
         )
         # >> Tensor(nEpisodes, |State|)
 
-        # Counter of number of environments done
-        nEnvDone = 0
+        # Counter of number of steps
+        self.steps = 0
+
+        # Counter of number of optimization steps
+        self.opt_steps = 0
 
         for t in count():
             actions = self.select_action(states, envs, train=True)
@@ -531,6 +526,8 @@ class LTFMSelector:
             envTransition = []
             for envIdx, env in enumerate(tqdm(envs)):
                 envTransition.append(env.step(actions[envIdx, 0].item()))
+
+            self.steps += 1
 
             observations, rewards, terminations = zip(*envTransition)
             observations = list(observations)
@@ -568,13 +565,6 @@ class LTFMSelector:
                     nextStates_onGoing.append(sp)
                 else:
                     envIdxToRemove.append(i)
-                    nEnvDone += 1
-
-                    # Saving trained policy network intermediately
-                    if not self.checkpoint_interval is None:
-                        if (nEnvDone) % self.checkpoint_interval == 0:
-                            self.policy_network_checkpoints[nEnvDone] =\
-                                self.policy_net.state_dict()
 
             for i in reversed(envIdxToRemove):
                 del envs[i]
@@ -592,12 +582,18 @@ class LTFMSelector:
             # Optimize the model over user-desired number of epochs
             for _ in range(self.epochs):
                 _res = self.optimize_model(optimizer, loss_function, monitor)
+                self.opt_steps += 1
 
-            if monitor:
-                writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
-                writer.add_scalar("Metrics/Average_Reward", _res[1], monitor_count)
-                writer.add_scalar("Metrics/Average_Target", _res[2], monitor_count)
-                monitor_count += 1
+                if monitor:
+                    writer.add_scalar("Metrics/Average_QValue", _res[0], self.opt_steps)
+                    writer.add_scalar("Metrics/Average_Reward", _res[1], self.opt_steps)
+                    writer.add_scalar("Metrics/Average_Target", _res[2], self.opt_steps)
+
+                # Saving trained policy network intermediately
+                if not self.checkpoint_interval is None:
+                    if (self.opt_steps) % self.checkpoint_interval == 0:
+                        self.policy_network_checkpoints[self.opt_steps] =\
+                            self.policy_net.state_dict()
 
             # Apply soft update to target network's weights
             targetParameters = self.target_net.state_dict()
@@ -610,12 +606,9 @@ class LTFMSelector:
             self.target_net.load_state_dict(targetParameters)
 
         # Save trained weights after all episodes
-        self.policy_network_checkpoints[self.episodes] = self.policy_net.state_dict()
+        self.policy_network_checkpoints[-1] = self.policy_net.state_dict()
 
         if monitor:
-            writer.add_scalar("Metrics/Average_QValue", _res[0], monitor_count)
-            writer.add_scalar("Metrics/Average_Reward", _res[1], monitor_count)
-            writer.add_scalar("Metrics/Average_Target", _res[2], monitor_count)
             writer.flush()
             writer.close()
 

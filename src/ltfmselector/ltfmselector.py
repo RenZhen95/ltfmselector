@@ -506,7 +506,7 @@ class LTFMSelector:
         self.opt_steps = 0
 
         for t in count():
-            actions = self.select_action(states, envs, train=True)
+            actions = self.select_action(states, envs, t, train=True)
             # >> Tensor(nEpisodes, 1) - Action selected for each environment
 
             # Log actions if desired
@@ -516,7 +516,7 @@ class LTFMSelector:
             # If maximum time_steps is reached, pick a prediction action based
             # on the one with highest Q-value
             if t+1 == self.max_timesteps:
-                actions = self.select_PM(states, envs)
+                actions = self.select_PM(states, envs, t)
 
             # Agent carries out action in each environment and returns:
             # - Observations :: list(nEpisodes)
@@ -570,7 +570,6 @@ class LTFMSelector:
                 del envs[i]
                 if log_actions:
                     del IDX[i]
-
             # All environments have terminated
             if len(nextStates_onGoing) == 0:
                 break
@@ -611,7 +610,6 @@ class LTFMSelector:
         if monitor:
             writer.flush()
             writer.close()
-
     def predict(self, X_test, log=False, **kwargs):
         '''
         Use trained agent to select features and a suitable prediction model
@@ -664,10 +662,10 @@ class LTFMSelector:
         )
 
         for t in count():
-            actions = self.select_action(states, envs, train=False)
+            actions = self.select_action(states, envs, t, train=False)
 
             if t+1 == self.max_timesteps:
-                actions = self.select_PM(states, envs)
+                actions = self.select_PM(states, envs, t)
 
             envTransition = []
             for envIdx, env in enumerate(tqdm(envs)):
@@ -721,7 +719,7 @@ class LTFMSelector:
 
         return y_pred
 
-    def select_action(self, states, envs, train=True):
+    def select_action(self, states, envs, t, train=True):
         '''
         Select an action based on the given states. For exploration an
         epsilon-greedy strategy is implemented - the agent will for an
@@ -736,6 +734,9 @@ class LTFMSelector:
         envs : torch.Tensor
             Environments agent interacts with
 
+        t : int
+            Time-step
+
         train : bool
             If `true` employ epsilon-greedy strategy
         '''
@@ -743,16 +744,15 @@ class LTFMSelector:
         # - Probability decreases exponentially over time
         if train:
             eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
-                np.exp(-1. * self.total_actions / self.eps_decay)
+                np.exp(-1. * t / self.eps_decay)
 
-            self.total_actions += 1
         else:
             eps_threshold = -1
 
         # Perform random action
         print(f"Eps: {eps_threshold}")
         if eps_threshold > random.random():
-            print(f"Step {self.total_actions-1}:: Random")
+            print(f"Step {t+1}:: Random")
             return torch.tensor(
                 [env.get_random_action() for env in envs],
                 device=self.device, dtype=torch.long
@@ -760,13 +760,13 @@ class LTFMSelector:
 
         # Perform maximizing action
         else:
-            print(f"Step {self.total_actions-1}:: Policy-based")
+            print(f"Step {t+1}:: Policy-based")
             with torch.no_grad():
                 QValues = self.policy_net(states)
                 # >> Tensor(nEpisodes, |Actions (#Features + #PM)|)
                 return QValues.max(1)[1].view(states.shape[0], 1)
 
-    def select_PM(self, states, envs):
+    def select_PM(self, states, envs, t):
         '''
         Select PM with highest Q-value based on given states.
 
@@ -777,10 +777,14 @@ class LTFMSelector:
 
         envs : torch.Tensor
             Environments agent interacts with
+
+        t : int
+            Time-step
         '''
+        print(f"Step {t+1}:: Policy-based (Final)")
         with torch.no_grad():
             QValuesPM = self.policy_net(states)[:, -(len(self.pModels)):]
-            return QValuesPM.max(1)[1].view(states.shape[0], 1)
+            return (QValuesPM.max(1)[1] + self.X.shape[1]).view(states.shape[0], 1)
 
     def optimize_model(self, optimizer, loss_function, monitor):
         '''

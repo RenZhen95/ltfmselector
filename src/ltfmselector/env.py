@@ -5,6 +5,10 @@ import pandas as pd
 
 from .utils import balance_classDistribution_patient
 
+### Special-tailored implementation ###
+# Function to get patient's ID given a stride pair ID
+getPatientID = lambda x: x[0:5] if x.startswith("ES") else x[0:8]
+
 # Functions to clip predicted regression values
 capUpperValues = lambda x: 3.0 if x > 3.0 else x
 capLowerValues = lambda x: 0.0 if x < 0.0 else x
